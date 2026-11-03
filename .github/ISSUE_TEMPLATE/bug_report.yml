@@ -1,0 +1,36 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Requests, SBOM excerpts or commands that trigger the bug. Remove any token or internal data.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant Tocsin logs (`RUST_LOG=debug` gives more detail).
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Release, commit, or Docker image tag.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      description: How you run Tocsin (Docker Compose, binary, …) and the Postgres version.

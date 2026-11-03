@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT purl FROM components WHERE sbom_id = (\n             SELECT id FROM sboms WHERE project_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1\n         ) ORDER BY purl",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "purl",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "components",
+            "name": "purl"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "bea05279fab3c2586edd5f852ff95df7f6c7f582127f346a718b7357a5cf7012"
+}

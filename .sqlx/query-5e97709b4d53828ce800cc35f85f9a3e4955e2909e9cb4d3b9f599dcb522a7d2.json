@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO sboms (project_id, version, document) VALUES ($1, $2, $3)\n         ON CONFLICT (project_id, version) DO UPDATE SET document = EXCLUDED.document\n         RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "sboms",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5e97709b4d53828ce800cc35f85f9a3e4955e2909e9cb4d3b9f599dcb522a7d2"
+}

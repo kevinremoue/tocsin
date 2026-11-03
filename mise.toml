@@ -1,0 +1,51 @@
+[tools]
+rust = { version = "1.99.1", components = "clippy,rustfmt" }
+"cargo:sqlx-cli" = { version = "0.9.0", features = "postgres,rustls", default-features = false }
+
+[env]
+# Local Postgres from docker-compose.yml (development credentials only)
+DATABASE_URL = "postgres://tocsin:tocsin@localhost:5433/tocsin"
+
+[tasks."db:up"]
+description = "Start the local Postgres"
+run = "docker compose up -d --wait postgres"
+
+[tasks."db:down"]
+description = "Stop the local stack"
+run = "docker compose down"
+
+[tasks."db:migrate"]
+description = "Apply migrations to the local Postgres"
+depends = ["db:up"]
+run = "sqlx migrate run"
+
+[tasks."db:prepare"]
+description = "Refresh .sqlx/ (query metadata for offline builds); run after changing a query"
+depends = ["db:migrate"]
+run = "cargo sqlx prepare -- --all-targets"
+
+[tasks.build]
+depends = ["db:migrate"]
+run = "cargo build"
+
+[tasks.test]
+description = "Run the tests; filter with: mise run test -- <name>"
+depends = ["db:migrate"]
+run = "cargo test"
+
+[tasks.lint]
+description = "fmt check, clippy, and .sqlx/ freshness check"
+depends = ["db:migrate"]
+run = [
+  "cargo fmt --check",
+  "cargo clippy --all-targets -- -D warnings",
+  "cargo sqlx prepare --check -- --all-targets",
+]
+
+[tasks.fmt]
+run = "cargo fmt"
+
+[tasks.dev]
+description = "Run Tocsin locally against the dev Postgres"
+depends = ["db:migrate"]
+run = "cargo run"

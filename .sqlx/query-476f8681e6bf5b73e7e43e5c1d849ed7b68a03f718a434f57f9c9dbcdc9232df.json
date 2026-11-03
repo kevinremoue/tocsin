@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO projects (name, token_hash) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "476f8681e6bf5b73e7e43e5c1d849ed7b68a03f718a434f57f9c9dbcdc9232df"
+}

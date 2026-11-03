@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT s.version,\n                  to_char(s.created_at, 'YYYY-MM-DD HH24:MI') AS \"released_at!\",\n                  (SELECT count(*) FROM components c WHERE c.sbom_id = s.id) AS \"components!\"\n           FROM sboms s WHERE s.project_id = $1\n           ORDER BY s.created_at DESC, s.id DESC",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sboms",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "released_at!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "components!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "7bbdb0f15157ee33b5a055ed75c43ac71fa22dd635479444cda1b0cd5063565b"
+}

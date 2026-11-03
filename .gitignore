@@ -1,0 +1,6 @@
+/target
+mise.local.toml
+.env
+.idea/
+.claude/settings.local.json
+TODO.md
