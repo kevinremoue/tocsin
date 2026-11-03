@@ -7,6 +7,7 @@ Tocsin is a single binary that needs a Postgres database. There is no other depe
 ## Requirements
 
 - **Postgres**: tested with Postgres 18. Tocsin creates and migrates its schema at startup; the database user needs the right to create tables.
+- **Outbound HTTPS** to `www.cisa.gov`, to download the KEV catalog. If your network blocks it, mirror the feed and set `TOCSIN_KEV_URL`.
 - **Storage**: database size grows with the number and size of the SBOMs you keep, since each document is stored in full.
 
 ## Docker image

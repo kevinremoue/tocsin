@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) AS \"total!\" FROM kev_entries\n           WHERE ($1::text IS NULL OR cve_id ILIKE $1 OR vendor_project ILIKE $1\n                  OR product ILIKE $1 OR name ILIKE $1)\n             AND (NOT $2 OR known_ransomware)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ab6121a527fa46fa849e16941bac9af9ea5bf02f77b94b495326f2ad5dffec9b"
+}

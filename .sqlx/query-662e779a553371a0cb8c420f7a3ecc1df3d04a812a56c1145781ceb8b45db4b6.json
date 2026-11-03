@@ -1,0 +1,86 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cve_id, vendor_project, product, name, known_ransomware,\n                  to_char(date_added, 'YYYY-MM-DD') AS \"date_added!\"\n           FROM kev_entries\n           WHERE ($1::text IS NULL OR cve_id ILIKE $1 OR vendor_project ILIKE $1\n                  OR product ILIKE $1 OR name ILIKE $1)\n             AND (NOT $2 OR known_ransomware)\n           ORDER BY date_added DESC, cve_id DESC\n           LIMIT $3 OFFSET $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cve_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "cve_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "vendor_project",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "vendor_project"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "product",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "product"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "known_ransomware",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "known_ransomware"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "date_added!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Bool",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "662e779a553371a0cb8c420f7a3ecc1df3d04a812a56c1145781ceb8b45db4b6"
+}

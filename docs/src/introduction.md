@@ -10,7 +10,7 @@ A *tocsin* is the alarm bell that towns rang in an emergency. Tocsin, the tool, 
 
 No dashboard full of thousands of "medium" findings: one alert per project and exploited CVE, when it matters.
 
-> **Status: early development.** SBOM ingestion and the dashboard work today. Vulnerability matching and alerting are being built; see the [roadmap](roadmap.md). The dashboard has no authentication yet, so do not expose Tocsin to an untrusted network.
+> **Status: early development.** SBOM ingestion, the KEV catalog sync and the dashboard work today. Vulnerability matching and alerting are being built; see the [roadmap](roadmap.md). The dashboard has no authentication yet, so do not expose Tocsin to an untrusted network.
 
 ## Why only KEV?
 

@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE kev_sync SET last_error = $1, last_attempt_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "339cc7412f52925c4353d0fe525347cc5738a488f6b6e8ce08a7cdd692cec41f"
+}

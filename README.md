@@ -11,7 +11,7 @@ It is a lightweight alternative to [Dependency-Track](https://dependencytrack.or
 No dashboard full of thousands of "medium" findings: one alert per project and exploited CVE, when it matters.
 
 > [!WARNING]
-> **Tocsin is in early development.** SBOM ingestion and the dashboard work today; vulnerability matching and alerting are being built (see the [roadmap](https://kevinremoue.github.io/tocsin/roadmap.html)). The dashboard has no authentication yet: do not expose Tocsin to an untrusted network.
+> **Tocsin is in early development.** SBOM ingestion, the KEV catalog sync and the dashboard work today; vulnerability matching and alerting are being built (see the [roadmap](https://kevinremoue.github.io/tocsin/roadmap.html)). The dashboard has no authentication yet: do not expose Tocsin to an untrusted network.
 
 ## How it works
 

@@ -8,10 +8,10 @@ Tocsin is in early development. Version 0.1.0 will be tagged once a pushed SBOM 
 - [x] Server-rendered dashboard
 - [x] Docker image and Docker Compose setup
 - [x] Documentation site
+- [x] **CISA KEV catalog**: periodic sync and detection of new entries
 
 ## Next
 
-- [ ] **CISA KEV catalog**: periodic sync and detection of new entries
 - [ ] **OSV.dev matching**: purl → CVEs, keeping only those in KEV
 - [ ] **Google Chat alerts**: one per (project, CVE), on new KEV entries and on new SBOMs
 - [ ] **Dashboard**: KEV CVEs affecting each project, alert history

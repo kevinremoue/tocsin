@@ -1,4 +1,5 @@
 mod api;
+mod kev;
 mod sbom;
 mod web;
 
@@ -22,6 +23,9 @@ async fn main() -> anyhow::Result<()> {
     if admin_token_hash.is_none() {
         tracing::warn!("TOCSIN_ADMIN_TOKEN not set: admin API disabled");
     }
+
+    let kev_config = kev::Config::from_env()?;
+    tokio::spawn(kev::run(db.clone(), kev::http_client()?, kev_config));
 
     let app = api::router(api::AppState {
         db,

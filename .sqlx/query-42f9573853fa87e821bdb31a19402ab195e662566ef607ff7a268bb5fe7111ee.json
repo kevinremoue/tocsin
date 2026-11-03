@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kev_entries (cve_id, vendor_project, product, name, date_added, known_ransomware, data)\n           SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[]::date[], $6::bool[], $7::jsonb[])\n           ON CONFLICT (cve_id) DO UPDATE SET\n               vendor_project = EXCLUDED.vendor_project,\n               product = EXCLUDED.product,\n               name = EXCLUDED.name,\n               date_added = EXCLUDED.date_added,\n               known_ransomware = EXCLUDED.known_ransomware,\n               data = EXCLUDED.data,\n               updated_at = now()\n           WHERE kev_entries.data IS DISTINCT FROM EXCLUDED.data\n           RETURNING cve_id, (xmax = 0) AS \"inserted!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cve_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "cve_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "inserted!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "BoolArray",
+        "JsonbArray"
+      ]
+    },
+    "nullable": [
+      false,
+      null
+    ]
+  },
+  "hash": "42f9573853fa87e821bdb31a19402ab195e662566ef607ff7a268bb5fe7111ee"
+}

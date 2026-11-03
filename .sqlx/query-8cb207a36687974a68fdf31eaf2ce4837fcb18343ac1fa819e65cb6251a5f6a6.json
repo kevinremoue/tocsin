@@ -1,0 +1,125 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT cve_id, vendor_project, product, name, known_ransomware,\n                  to_char(date_added, 'YYYY-MM-DD') AS \"date_added!\",\n                  data->>'shortDescription' AS description,\n                  data->>'requiredAction' AS required_action,\n                  data->>'dueDate' AS due_date,\n                  data->>'notes' AS notes,\n                  ARRAY(SELECT jsonb_array_elements_text(\n                            CASE WHEN jsonb_typeof(data->'cwes') = 'array' THEN data->'cwes' ELSE '[]' END\n                        )) AS \"cwes!\",\n                  to_char(first_seen_at, 'YYYY-MM-DD HH24:MI') AS \"first_seen_at!\"\n           FROM kev_entries WHERE cve_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cve_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "cve_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "vendor_project",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "vendor_project"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "product",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "product"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "known_ransomware",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "known_ransomware"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "date_added!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "description",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "required_action",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "due_date",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "notes",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 10,
+        "name": "cwes!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 11,
+        "name": "first_seen_at!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "8cb207a36687974a68fdf31eaf2ce4837fcb18343ac1fa819e65cb6251a5f6a6"
+}

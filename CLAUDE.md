@@ -9,14 +9,15 @@ Tocsin is a lightweight alternative to Dependency-Track. It collects each projec
 Current state:
 - `src/main.rs`: startup, configured through the env vars `DATABASE_URL`, `BIND_ADDR` and `TOCSIN_ADMIN_TOKEN`.
 - `src/api.rs`: router, handlers and bearer auth.
-- `src/web.rs`: SSR dashboard built with `maud`, which auto-escapes every value (no template files, no JS). Pages: `/` lists projects, `/projects/{name}` shows releases and the components of the latest release. Dates are formatted in SQL (`to_char`), so there is no chrono or time dependency. The dashboard has no authentication yet.
+- `src/web.rs`: SSR dashboard built with `maud`, which auto-escapes every value (no template files, no JS). Pages: `/` lists projects, `/projects/{name}` shows releases and the components of the latest release, `/kev` browses the KEV catalog (`q` search, `ransomware=on`, `page`; filters are plain GET forms), `/kev/{cve}` shows one entry. Links found in KEV `notes` are rendered only if they start with `http(s)://`. Dates are formatted in SQL (`to_char`), so there is no chrono or time dependency. The dashboard has no authentication yet.
 - `src/sbom.rs`: CycloneDX parsing. It extracts purls recursively; components without a purl are skipped.
+- `src/kev.rs`: CISA KEV catalog sync, a background task spawned from `main` (`TOCSIN_KEV_URL`, `TOCSIN_KEV_SYNC_MINUTES`, default 6 h). Conditional GET: cisa.gov honors `If-Modified-Since` but ignores `If-None-Match`, so both are sent. Bulk upsert with `UNNEST`; `RETURNING (xmax = 0)` tells new entries from updated ones. Status and last error live in the single-row `kev_sync` table. reqwest is built with `rustls-no-provider` and uses the `ring` provider installed in `kev::http_client()`, so aws-lc-rs stays out of the build. Tests serve a fake feed from a local axum server (no network).
 
 Endpoints:
 - `POST /api/projects` (admin token): creates a project and returns its token once. Only the SHA-256 of the token is stored. If `TOCSIN_ADMIN_TOKEN` is unset, this endpoint answers 403.
 - `POST /api/sboms[?version=]` (project token, `Content-Type: application/json`): the project comes from the token. The version comes from `?version=`, otherwise `metadata.component.version`. Re-pushing a version replaces its SBOM and components.
 
-Schema: `projects`, `sboms` (one per release, raw JSONB), `components` (keyed by purl). Add a new migration for every schema change; never edit an applied migration.
+Schema: `projects`, `sboms` (one per release, raw JSONB), `components` (keyed by purl), `kev_entries` (one per CVE, typed columns + raw JSONB, `first_seen_at`), `kev_sync` (single row). Add a new migration for every schema change; never edit an applied migration.
 
 ## Commands
 

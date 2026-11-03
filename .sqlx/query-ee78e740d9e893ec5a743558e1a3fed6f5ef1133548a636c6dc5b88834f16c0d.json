@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT catalog_version,\n                  to_char(checked_at, 'YYYY-MM-DD HH24:MI') AS checked_at,\n                  last_error,\n                  to_char(last_attempt_at, 'YYYY-MM-DD HH24:MI') AS last_attempt_at,\n                  (SELECT count(*) FROM kev_entries) AS \"entries!\"\n           FROM kev_sync",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "catalog_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_sync",
+            "name": "catalog_version"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "checked_at",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "last_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_sync",
+            "name": "last_error"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "last_attempt_at",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "entries!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      null,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "ee78e740d9e893ec5a743558e1a3fed6f5ef1133548a636c6dc5b88834f16c0d"
+}

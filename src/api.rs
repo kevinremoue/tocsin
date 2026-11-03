@@ -24,6 +24,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(crate::web::index))
         .route("/projects/{name}", get(crate::web::project))
+        .route("/kev", get(crate::web::kev_list))
+        .route("/kev/{cve}", get(crate::web::kev_entry))
         .route("/health", get(health))
         .route("/api/projects", post(create_project))
         // ponytail: axum's 2 MB default is too small for large SBOMs

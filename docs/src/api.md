@@ -89,7 +89,9 @@ GET /health
 
 | Page | Content |
 |---|---|
-| `GET /` | All projects, with their latest release, release date, component count and number of releases. |
+| `GET /` | The KEV catalog status, then all projects with their latest release, release date, component count and number of releases. |
 | `GET /projects/{name}` | The project's releases, and the components of its latest release. |
+| `GET /kev` | The KEV catalog, newest first, 100 entries per page. Query parameters: `q` searches the CVE ID, vendor, product and name; `ransomware=on` keeps only entries known to be used in ransomware campaigns; `page` selects the page. |
+| `GET /kev/{cve}` | One KEV entry: description, required action, due date, weaknesses (CWE), reference links, and when Tocsin first saw it. `404` if the CVE is not in the catalog. |
 
 The dashboard is server-rendered HTML and has no authentication yet.
