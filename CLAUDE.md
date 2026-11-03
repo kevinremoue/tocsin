@@ -34,7 +34,7 @@ Add new tooling or commands to `mise.toml`, not to ad-hoc scripts.
 
 ## Open source
 
-The project is public, dual-licensed MIT OR Apache-2.0. Everything in the repo (code, comments, UI strings, docs) is in English. CI (`.github/workflows/ci.yml`) runs `mise run lint`, `mise run test` and a Docker build. The roadmap lives in `README.md`; user-visible changes go under `Unreleased` in `CHANGELOG.md`.
+The project is public, dual-licensed MIT OR Apache-2.0. Everything in the repo (code, comments, UI strings, docs) is in English. CI (`.github/workflows/ci.yml`) runs `mise run lint`, `mise run test` and a Docker build. Documentation is an mdBook site in `docs/` (`mise run docs:serve` / `docs:build`), deployed to GitHub Pages by `.github/workflows/docs.yml`; it is the reference for users (API, configuration, roadmap), so update the matching page when behavior changes, and keep `README.md` short. user-visible changes go under `Unreleased` in `CHANGELOG.md`.
 
 ## Decided design
 

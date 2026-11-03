@@ -1,0 +1,11 @@
+[book]
+title = "Tocsin"
+description = "Lightweight SBOM monitor that alerts when your production dependencies are hit by an actively exploited CVE"
+authors = ["Kevin Remoué"]
+language = "en"
+src = "src"
+
+[output.html]
+git-repository-url = "https://github.com/kevinremoue/tocsin"
+edit-url-template = "https://github.com/kevinremoue/tocsin/edit/main/docs/{path}"
+site-url = "/tocsin/"

@@ -13,7 +13,7 @@ Thanks for your interest in Tocsin! Bug reports, ideas and pull requests are all
 You need [mise](https://mise.jdx.dev/) and Docker.
 
 ```sh
-mise install     # pinned Rust toolchain + sqlx-cli
+mise install     # pinned Rust toolchain, sqlx-cli and mdBook
 mise run dev     # Postgres on port 5433, migrations, then cargo run
 ```
 
@@ -26,6 +26,7 @@ Useful tasks (`mise tasks` lists them all):
 | `mise run fmt` | Format the code. |
 | `mise run db:prepare` | Refresh `.sqlx/` after changing a SQL query. |
 | `mise run db:down` | Stop the local stack. |
+| `mise run docs:serve` | Preview the documentation site at <http://localhost:3001>. |
 
 Tasks that compile the code start Postgres and apply migrations first: `sqlx::query!` macros check every query against a live database at compile time.
 
@@ -37,6 +38,7 @@ Tasks that compile the code start Postgres and apply migrations first: `sqlx::qu
 - **SQL metadata.** If you add or change a query, run `mise run db:prepare` and commit the `.sqlx/` changes. CI fails otherwise.
 - **Dashboard.** Server-side rendered with [maud](https://maud.lambda.xyz/), no JavaScript. Values are escaped automatically; never use `PreEscaped` on user-supplied data.
 - **Commits.** Keep commits focused, with a message that explains *why*.
+- **Documentation.** The docs site lives in `docs/src/` ([mdBook](https://rust-lang.github.io/mdBook/)). Update the relevant page when you change behavior, configuration or the API.
 - **Changelog.** Add a line under `Unreleased` in [CHANGELOG.md](CHANGELOG.md) for user-visible changes.
 
 Before opening a pull request, make sure `mise run lint` and `mise run test` pass.

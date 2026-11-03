@@ -13,5 +13,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Server-rendered dashboard listing projects, their releases and the components of the latest release.
 - `GET /health` endpoint.
 - Docker image and Docker Compose setup.
+- Documentation site, built with mdBook from `docs/`.
 
 [Unreleased]: https://github.com/kevinremoue/tocsin/commits/main

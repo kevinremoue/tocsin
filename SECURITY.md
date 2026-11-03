@@ -20,7 +20,7 @@ Tocsin is pre-1.0: only the latest release and the `main` branch receive securit
 
 ## Deployment notes
 
-Until dashboard authentication ships (see the roadmap in the [README](README.md)):
+Until dashboard authentication ships (see the [roadmap](https://kevinremoue.github.io/tocsin/roadmap.html)):
 
 - the dashboard (`/` and `/projects/…`) is **unauthenticated** and shows the components of every project: do not expose it to an untrusted network;
 - run Tocsin behind a reverse proxy that terminates TLS, since tokens travel in the `Authorization` header;
