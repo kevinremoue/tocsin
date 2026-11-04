@@ -8,13 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- `POST /api/projects`: create a project (admin token) and get its bearer token.
-- `POST /api/sboms`: push a CycloneDX JSON SBOM per release with a project token; purls are extracted, nested components included.
-- Server-rendered dashboard listing projects, their releases and the components of the latest release.
-- CISA KEV catalog sync: downloaded at startup and every 6 hours (`TOCSIN_KEV_SYNC_MINUTES`), with conditional requests; new entries are detected and the sync status is shown on the dashboard.
-- Dashboard pages for the KEV catalog: `/kev` (search, ransomware filter, pagination) and `/kev/{cve}` (entry details and references).
-- `GET /health` endpoint.
-- Docker image and Docker Compose setup.
-- Documentation site, built with mdBook from `docs/`.
+- SBOM intake: `POST /api/sboms` with a project token, CycloneDX JSON, gzip-compressed uploads accepted; component purls and licenses extracted, nested components included.
+- Vulnerability matching through OSV.dev for every component, during the push (bounded to 60 s) and in the refresh job; advisories grouped by CVE, severity from GitHub ratings or CVSS v3 scores.
+- CISA KEV catalog sync with conditional requests; KEV findings flagged everywhere.
+- Google Chat alerts, once per project and vulnerability: KEV by default (`TOCSIN_ALERT_KEV`), optional severity threshold (`TOCSIN_ALERT_MIN_SEVERITY`).
+- Auditing with CycloneDX VEX states and justifications; VEX export and import.
+- Policies on licenses, severity and KEV, with violations.
+- EPSS scores from FIRST's daily file (`epss-sync` job, conditional download, only known CVEs kept): shown on findings, used to order them, `epss` policy kind and `TOCSIN_ALERT_MIN_EPSS` alert rule.
+- Daily metrics per project.
+- Findings API for CI gating: `GET /api/projects/{name}/findings`.
+- Dashboard: portfolio, projects, vulnerabilities, KEV catalog, policies, alerts; protected by the admin token.
+- Commands `serve`, `migrate`, `kev-sync`, `epss-sync` and `refresh`; jobs also over `POST /api/jobs/{job}`; optional in-process scheduler (`TOCSIN_SCHEDULER`). Graceful shutdown on SIGTERM.
+- Distroless Docker image, Docker Compose setup, documentation site with a Cloud Run guide.
 
 [Unreleased]: https://github.com/kevinremoue/tocsin/commits/main

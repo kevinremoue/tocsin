@@ -16,13 +16,13 @@ export TOCSIN_ADMIN_TOKEN=$(openssl rand -hex 32)
 docker compose up -d --build
 ```
 
-This starts Postgres and Tocsin. Migrations run automatically when Tocsin starts. Check that it is up:
+This starts Postgres and Tocsin. At startup Tocsin applies its migrations, then (because Compose enables the built-in scheduler) downloads the KEV catalog. Check that it is up:
 
 ```sh
 curl http://localhost:3000/health   # 200 OK
 ```
 
-The admin token lets you create projects. Keep it somewhere safe: Tocsin only stores its hash. If `TOCSIN_ADMIN_TOKEN` is not set, the admin API is disabled.
+The admin token creates projects and protects the dashboard. Keep it somewhere safe: Tocsin only stores its hash.
 
 ## 2. Create a project
 
@@ -63,17 +63,26 @@ curl -X POST "http://localhost:3000/api/sboms?version=1.4.2" \
 ```
 
 ```json
-{"project": "my-service", "version": "1.4.2", "components": 187}
+{"project": "my-service", "version": "1.4.2", "components": 187,
+ "matching": "done", "findings": 12, "kev": 1, "alerted": 0}
 ```
+
+Tocsin stored the release, matched its components against OSV.dev, and found 12 vulnerabilities, one of them actively exploited. `alerted` is 0 because no notification channel is configured yet: see [Alerts](alerts.md).
 
 If you leave out `?version=`, Tocsin uses `metadata.component.version` from the SBOM.
 
 ## 4. Open the dashboard
 
-Go to <http://localhost:3000>. You see your project with its latest release; click it to see every release and the components of the latest one.
+Go to <http://localhost:3000>. Your browser asks for credentials: use any user name, and the admin token as password.
+
+- **Projects** shows the portfolio: findings per project and severity, KEV first.
+- Click a project to see its vulnerabilities, policy violations, history, releases and components.
+- **Vulnerabilities** lists every flaw across projects; **KEV catalog** browses the catalog and shows which entries affect you.
 
 ## Next steps
 
-- Automate the push in your pipelines: [Pushing SBOMs from CI](ci-integration.md).
-- Run Tocsin for your team: [Deployment](deployment.md).
+- Automate the push in your pipelines, and fail builds that ship a KEV CVE: [Pushing SBOMs from CI](ci-integration.md).
+- Triage findings: [Vulnerabilities and auditing](vulnerabilities.md).
+- Get notified: [Alerts](alerts.md).
+- Run Tocsin for your team: [Deploying Tocsin](deployment.md), or [serverless on Cloud Run](cloud-run.md).
 - Stop the local stack with `docker compose down` (add `-v` to delete the data).

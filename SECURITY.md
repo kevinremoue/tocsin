@@ -20,8 +20,7 @@ Tocsin is pre-1.0: only the latest release and the `main` branch receive securit
 
 ## Deployment notes
 
-Until dashboard authentication ships (see the [roadmap](https://kevinremoue.github.io/tocsin/roadmap.html)):
-
-- the dashboard (`/` and `/projects/…`) is **unauthenticated** and shows the components of every project: do not expose it to an untrusted network;
-- run Tocsin behind a reverse proxy that terminates TLS, since tokens travel in the `Authorization` header;
-- treat `TOCSIN_ADMIN_TOKEN` and project tokens as secrets. Only their SHA-256 hashes are stored in the database.
+- Set `TOCSIN_ADMIN_TOKEN`: it protects the admin API and the dashboard. Without it the dashboard is open, which is only acceptable locally. There are no user accounts yet: everyone with dashboard access shares the admin token.
+- Run Tocsin behind TLS (a reverse proxy or a platform such as Cloud Run), since tokens travel in the `Authorization` header.
+- Treat `TOCSIN_ADMIN_TOKEN`, project tokens and `TOCSIN_GOOGLE_CHAT_WEBHOOK` as secrets. Only the SHA-256 hashes of tokens are stored in the database.
+- SBOMs and vulnerability feeds are untrusted input: the dashboard escapes every value, and only `http(s)` links from feeds are rendered as links.

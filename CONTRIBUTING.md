@@ -27,6 +27,10 @@ Useful tasks (`mise tasks` lists them all):
 | `mise run db:prepare` | Refresh `.sqlx/` after changing a SQL query. |
 | `mise run db:down` | Stop the local stack. |
 | `mise run docs:serve` | Preview the documentation site at <http://localhost:3001>. |
+| `mise run seed` | Load the example projects of `examples/sboms/` into the running dev server. |
+| `mise run db:reset` | Drop and recreate the local database. |
+
+To try Tocsin with realistic data: run `mise run dev` in one terminal and `mise run seed` in another, then open <http://localhost:3000> (any user name, password `dev-admin-token`).
 
 Tasks that compile the code start Postgres and apply migrations first: `sqlx::query!` macros check every query against a live database at compile time.
 
