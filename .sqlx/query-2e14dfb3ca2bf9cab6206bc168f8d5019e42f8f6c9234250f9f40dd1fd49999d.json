@@ -1,0 +1,66 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT model_version, to_char(score_date, 'YYYY-MM-DD') AS score_date,\n                  to_char(checked_at, 'YYYY-MM-DD HH24:MI') AS checked_at, last_error,\n                  to_char(last_attempt_at, 'YYYY-MM-DD HH24:MI') AS last_attempt_at,\n                  (SELECT count(*) FROM epss_scores) AS \"scores!\"\n           FROM epss_sync",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "model_version",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "epss_sync",
+            "name": "model_version"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "score_date",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "checked_at",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "last_error",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "epss_sync",
+            "name": "last_error"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "last_attempt_at",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "scores!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      null,
+      null,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "2e14dfb3ca2bf9cab6206bc168f8d5019e42f8f6c9234250f9f40dd1fd49999d"
+}

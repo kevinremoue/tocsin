@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT etag, last_modified, now()::text AS \"started!\",\n                  downloaded_at IS NULL OR EXISTS (\n                      SELECT 1 FROM vulnerabilities WHERE fetched_at >= downloaded_at\n                  ) AS \"new_cves!\"\n           FROM epss_sync",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "etag",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "epss_sync",
+            "name": "etag"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "last_modified",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "epss_sync",
+            "name": "last_modified"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "started!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "new_cves!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true,
+      true,
+      null,
+      null
+    ]
+  },
+  "hash": "6c2c954c328c41fe14fb241a07b67706b84129df98990769a7a08eb73fbafe51"
+}

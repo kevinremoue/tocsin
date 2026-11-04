@@ -1,0 +1,21 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT DISTINCT unnest(cve_ids) AS \"cve!\" FROM vulnerabilities",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cve!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "731f715c95059a03ba1ea0f6354c88734c2c6c30f1560f3099b8db464b491110"
+}

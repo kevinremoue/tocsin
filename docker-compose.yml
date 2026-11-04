@@ -23,6 +23,10 @@ services:
       DATABASE_URL: postgres://tocsin:tocsin@postgres:5432/tocsin
       # Enables the admin API (project creation). Example: TOCSIN_ADMIN_TOKEN=$(openssl rand -hex 32)
       TOCSIN_ADMIN_TOKEN: ${TOCSIN_ADMIN_TOKEN:-}
+      # Local use: run the periodic jobs inside the server (on serverless, use an external scheduler)
+      TOCSIN_SCHEDULER: "true"
+      TOCSIN_GOOGLE_CHAT_WEBHOOK: ${TOCSIN_GOOGLE_CHAT_WEBHOOK:-}
+      TOCSIN_PUBLIC_URL: http://localhost:3000
       RUST_LOG: info
     ports:
       - "3000:3000"

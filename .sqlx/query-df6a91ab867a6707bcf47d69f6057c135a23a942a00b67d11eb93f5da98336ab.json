@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE epss_sync SET last_error = $1, last_attempt_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "df6a91ab867a6707bcf47d69f6057c135a23a942a00b67d11eb93f5da98336ab"
+}

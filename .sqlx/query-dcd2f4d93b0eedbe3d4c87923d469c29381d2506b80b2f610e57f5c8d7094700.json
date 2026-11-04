@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO component_vulns (purl, vuln_id)\n         SELECT l.purl, l.vuln_id FROM UNNEST($1::text[], $2::text[]) AS l (purl, vuln_id)\n         JOIN vulnerabilities v ON v.id = l.vuln_id\n         ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "dcd2f4d93b0eedbe3d4c87923d469c29381d2506b80b2f610e57f5c8d7094700"
+}

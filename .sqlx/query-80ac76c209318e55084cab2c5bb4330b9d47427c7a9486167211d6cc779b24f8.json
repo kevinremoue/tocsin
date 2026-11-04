@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO project_metrics (project_id, day, critical, high, medium, low, unknown,\n                                      kev, suppressed, components)\n         SELECT p.id, current_date,\n                count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 4),\n                count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 3),\n                count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 2),\n                count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 1),\n                count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 0),\n                count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.kev),\n                count(f.vuln_key) FILTER (WHERE f.suppressed),\n                (SELECT count(*) FROM latest_sboms ls JOIN components c ON c.sbom_id = ls.id\n                 WHERE ls.project_id = p.id)\n         FROM projects p\n         LEFT JOIN findings f ON f.project_id = p.id\n         WHERE $1::bigint IS NULL OR p.id = $1\n         GROUP BY p.id\n         ON CONFLICT (project_id, day) DO UPDATE SET\n             critical = EXCLUDED.critical, high = EXCLUDED.high, medium = EXCLUDED.medium,\n             low = EXCLUDED.low, unknown = EXCLUDED.unknown, kev = EXCLUDED.kev,\n             suppressed = EXCLUDED.suppressed, components = EXCLUDED.components",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "80ac76c209318e55084cab2c5bb4330b9d47427c7a9486167211d6cc779b24f8"
+}

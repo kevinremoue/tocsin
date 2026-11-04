@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT k.cve_id, k.name FROM kev_entries k\n           WHERE k.cve_id IN (SELECT unnest(cve_ids) FROM vulnerabilities WHERE canonical_id = $1)\n           ORDER BY k.cve_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cve_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "cve_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "kev_entries",
+            "name": "name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "30a4db1444abaf283da6e251c66aaf943e0c2dcdeb28c4936c09fb1308c90b47"
+}

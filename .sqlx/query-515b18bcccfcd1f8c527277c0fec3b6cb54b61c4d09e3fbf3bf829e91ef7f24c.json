@@ -1,0 +1,121 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, summary, severity, cvss_score, cvss_vector, withdrawn, cve_ids,\n                  to_char(published_at, 'YYYY-MM-DD') AS published,\n                  data->>'details' AS details,\n                  ARRAY(SELECT r->>'url' FROM jsonb_array_elements(\n                            CASE WHEN jsonb_typeof(data->'references') = 'array'\n                                 THEN data->'references' ELSE '[]' END) r) AS \"references!\"\n           FROM vulnerabilities WHERE canonical_id = $1 ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "vulnerabilities",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "summary",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "vulnerabilities",
+            "name": "summary"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "severity",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "vulnerabilities",
+            "name": "severity"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "cvss_score",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "vulnerabilities",
+            "name": "cvss_score"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "cvss_vector",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "vulnerabilities",
+            "name": "cvss_vector"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "withdrawn",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "vulnerabilities",
+            "name": "withdrawn"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "cve_ids",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "vulnerabilities",
+            "name": "cve_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "published",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "details",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 9,
+        "name": "references!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "515b18bcccfcd1f8c527277c0fec3b6cb54b61c4d09e3fbf3bf829e91ef7f24c"
+}

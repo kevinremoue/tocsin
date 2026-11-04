@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM epss_scores",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "0d3da16b2855189f57e70ebc21e1c3fe0e55fff2e1ab2cde3ec8a98faecb54b9"
+}

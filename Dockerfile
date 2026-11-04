@@ -8,13 +8,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --locked && cp target/release/tocsin /tocsin
 
-FROM debian:trixie-slim
-# CA certificates: needed for outbound HTTPS (vulnerability feeds, webhooks)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# Distroless: glibc and CA certificates (outbound HTTPS to OSV, CISA, webhooks), no shell,
+# runs as an unprivileged user. Small images start faster on serverless platforms.
+FROM gcr.io/distroless/cc-debian13:nonroot
 COPY --from=build /tocsin /usr/local/bin/tocsin
-USER 65534:65534
 ENV BIND_ADDR=0.0.0.0:3000
 EXPOSE 3000
 ENTRYPOINT ["/usr/local/bin/tocsin"]

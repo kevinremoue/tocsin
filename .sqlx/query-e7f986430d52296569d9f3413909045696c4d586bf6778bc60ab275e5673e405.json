@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.name, f.purls AS \"purls!\", f.state, f.suppressed AS \"suppressed!\"\n           FROM findings f JOIN projects p ON p.id = f.project_id\n           WHERE f.vuln_key = $1 ORDER BY f.suppressed, p.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "purls!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "purls"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "suppressed!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "suppressed"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "e7f986430d52296569d9f3413909045696c4d586bf6778bc60ab275e5673e405"
+}

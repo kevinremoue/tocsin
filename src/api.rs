@@ -1,38 +1,72 @@
-use crate::sbom;
+use crate::{config::Config, jobs, policies, sbom, vex, vulns};
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, FromRequestParts, Query, State},
+    extract::{DefaultBodyLimit, FromRequestParts, Path, Query, State},
     http::{HeaderMap, StatusCode, request::Parts},
-    routing::{get, post},
+    middleware,
+    routing::{delete, get, post, put},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
+use std::{sync::Arc, time::Duration};
+use tower_http::decompression::RequestDecompressionLayer;
+
+/// Largest SBOM or VEX document accepted, once decompressed.
+const MAX_DOCUMENT: usize = 50 * 1024 * 1024;
+/// Time an SBOM push may spend matching against the vulnerability sources. Past it, the
+/// push still succeeds and the next refresh job completes the matching.
+const MATCH_ON_PUSH_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
-    /// SHA-256 of TOCSIN_ADMIN_TOKEN; None = admin API disabled
-    pub admin_token_hash: Option<String>,
+    pub config: Arc<Config>,
+    pub http: reqwest::Client,
+}
+
+impl AppState {
+    #[cfg(test)]
+    pub fn for_tests(db: PgPool, config: Config) -> Self {
+        Self {
+            db,
+            config: Arc::new(config),
+            http: crate::http::client().unwrap(),
+        }
+    }
 }
 
 pub type ApiError = (StatusCode, String);
 pub type ApiResult<T> = Result<T, ApiError>;
 
 pub fn router(state: AppState) -> Router {
+    let dashboard = crate::web::routes().layer(middleware::from_fn_with_state(
+        state.clone(),
+        crate::web::require_auth,
+    ));
+    // Uploads may be gzip-compressed (Content-Encoding: gzip): SBOMs compress very well, which
+    // keeps large ones under the request size limits of serverless platforms.
+    let uploads = Router::new()
+        .route("/api/sboms", post(ingest_sbom))
+        .route("/api/projects/{name}/vex", post(import_vex))
+        .layer(DefaultBodyLimit::max(MAX_DOCUMENT))
+        .layer(RequestDecompressionLayer::new());
     Router::new()
-        .route("/", get(crate::web::index))
-        .route("/projects/{name}", get(crate::web::project))
-        .route("/kev", get(crate::web::kev_list))
-        .route("/kev/{cve}", get(crate::web::kev_entry))
+        .merge(dashboard)
+        .merge(uploads)
         .route("/health", get(health))
-        .route("/api/projects", post(create_project))
-        // ponytail: axum's 2 MB default is too small for large SBOMs
+        .route("/api/projects", post(create_project).get(list_projects))
+        .route("/api/projects/{name}/findings", get(project_findings))
+        .route("/api/projects/{name}/violations", get(project_violations))
         .route(
-            "/api/sboms",
-            post(ingest_sbom).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+            "/api/projects/{name}/analyses/{vuln}",
+            put(put_analysis).delete(delete_analysis),
         )
+        .route("/api/projects/{name}/vex", get(export_vex))
+        .route("/api/policies", get(list_policies).post(create_policy))
+        .route("/api/policies/{id}", delete(delete_policy))
+        .route("/api/jobs/{job}", post(run_job))
         .with_state(state)
 }
 
@@ -42,6 +76,74 @@ async fn health(State(st): State<AppState>) -> StatusCode {
         Err(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Authentication
+
+fn is_admin(st: &AppState, headers: &HeaderMap) -> bool {
+    match (&st.config.admin_token_hash, bearer(headers)) {
+        (Some(expected), Some(token)) => *expected == sha256_hex(token),
+        _ => false,
+    }
+}
+
+fn require_admin(st: &AppState, headers: &HeaderMap) -> ApiResult<()> {
+    if st.config.admin_token_hash.is_none() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "admin API disabled: TOCSIN_ADMIN_TOKEN is not set".into(),
+        ));
+    }
+    if is_admin(st, headers) {
+        Ok(())
+    } else {
+        Err(unauthorized())
+    }
+}
+
+/// Project authenticated by its bearer token.
+struct Project {
+    id: i64,
+    name: String,
+}
+
+impl FromRequestParts<AppState> for Project {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, st: &AppState) -> ApiResult<Self> {
+        let token = bearer(&parts.headers).ok_or_else(unauthorized)?;
+        sqlx::query_as!(
+            Project,
+            "SELECT id, name FROM projects WHERE token_hash = $1",
+            sha256_hex(token),
+        )
+        .fetch_optional(&st.db)
+        .await
+        .map_err(internal)?
+        .ok_or_else(unauthorized)
+    }
+}
+
+/// Project named in the path, accessed with the admin token or that project's own token.
+async fn named_project(st: &AppState, headers: &HeaderMap, name: &str) -> ApiResult<i64> {
+    let project = sqlx::query!("SELECT id, token_hash FROM projects WHERE name = $1", name)
+        .fetch_optional(&st.db)
+        .await
+        .map_err(internal)?;
+    let own_token = |hash: &str| bearer(headers).is_some_and(|t| sha256_hex(t) == hash);
+    match project {
+        Some(p) if is_admin(st, headers) || own_token(&p.token_hash) => Ok(p.id),
+        // Unknown projects answer like forbidden ones, so names cannot be probed
+        _ if bearer(headers).is_none() => Err(unauthorized()),
+        _ => Err((
+            StatusCode::NOT_FOUND,
+            "project not found or not accessible with this token".into(),
+        )),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Projects and SBOMs
 
 #[derive(Deserialize)]
 struct NewProject {
@@ -54,16 +156,7 @@ async fn create_project(
     headers: HeaderMap,
     Json(body): Json<NewProject>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
-    match (&st.admin_token_hash, bearer(&headers)) {
-        (None, _) => {
-            return Err((
-                StatusCode::FORBIDDEN,
-                "admin API disabled: TOCSIN_ADMIN_TOKEN is not set".into(),
-            ));
-        }
-        (Some(expected), Some(token)) if *expected == sha256_hex(token) => {}
-        _ => return Err(unauthorized()),
-    }
+    require_admin(&st, &headers)?;
 
     let name = body.name;
     let valid = !name.is_empty()
@@ -97,27 +190,31 @@ async fn create_project(
     ))
 }
 
-/// Project authenticated by its bearer token.
-struct Project {
-    id: i64,
-    name: String,
-}
-
-impl FromRequestParts<AppState> for Project {
-    type Rejection = ApiError;
-
-    async fn from_request_parts(parts: &mut Parts, st: &AppState) -> ApiResult<Self> {
-        let token = bearer(&parts.headers).ok_or_else(unauthorized)?;
-        sqlx::query_as!(
-            Project,
-            "SELECT id, name FROM projects WHERE token_hash = $1",
-            sha256_hex(token),
-        )
-        .fetch_optional(&st.db)
-        .await
-        .map_err(internal)?
-        .ok_or_else(unauthorized)
-    }
+/// Admin only. Every project with its latest release and finding counts.
+async fn list_projects(State(st): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+    require_admin(&st, &headers)?;
+    let rows = sqlx::query!(
+        r#"SELECT p.name, ls.version AS "version?",
+                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed) AS "findings!",
+                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.kev) AS "kev!",
+                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 4) AS "critical!",
+                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 3) AS "high!"
+           FROM projects p
+           LEFT JOIN latest_sboms ls ON ls.project_id = p.id
+           LEFT JOIN findings f ON f.project_id = p.id
+           GROUP BY p.name, ls.version ORDER BY p.name"#
+    )
+    .fetch_all(&st.db)
+    .await
+    .map_err(internal)?;
+    Ok(Json(json!(
+        rows.into_iter()
+            .map(|r| json!({
+                "name": r.name, "version": r.version, "findings": r.findings,
+                "kev": r.kev, "critical": r.critical, "high": r.high,
+            }))
+            .collect::<Vec<_>>()
+    )))
 }
 
 #[derive(Deserialize)]
@@ -126,7 +223,8 @@ struct IngestQuery {
     version: Option<String>,
 }
 
-/// Called by CI on each production release. Re-pushing a version replaces its SBOM.
+/// Called by CI on each production release. Re-pushing a version replaces its SBOM. The new
+/// components are matched against the vulnerability sources right away when possible.
 async fn ingest_sbom(
     State(st): State<AppState>,
     project: Project,
@@ -141,7 +239,13 @@ async fn ingest_sbom(
         .ok_or_else(|| {
             bad_request("release version missing: set metadata.component.version or ?version=")
         })?;
-    let purls: Vec<String> = parsed.purls.into_iter().collect();
+    let count = parsed.components.len();
+    let (purls, licenses): (Vec<String>, Vec<String>) = parsed
+        .components
+        .into_iter()
+        // One text per component: Postgres arrays of arrays must be rectangular
+        .map(|(purl, l)| (purl, l.into_iter().collect::<Vec<_>>().join("\n")))
+        .unzip();
 
     let mut tx = st.db.begin().await.map_err(internal)?;
     let sbom_id = sqlx::query_scalar!(
@@ -160,20 +264,331 @@ async fn ingest_sbom(
         .await
         .map_err(internal)?;
     sqlx::query!(
-        "INSERT INTO components (sbom_id, purl) SELECT $1, unnest($2::text[])",
+        "INSERT INTO components (sbom_id, purl, licenses)
+         SELECT $1, purl, COALESCE(string_to_array(NULLIF(licenses, ''), E'\n'), '{}')
+         FROM UNNEST($2::text[], $3::text[]) AS t (purl, licenses)",
         sbom_id,
         &purls,
+        &licenses,
     )
     .execute(&mut *tx)
     .await
     .map_err(internal)?;
     tx.commit().await.map_err(internal)?;
 
+    let matching = if !st.config.match_on_push {
+        "disabled"
+    } else {
+        let stale = vulns::stale_purls(&st.db, project.id, st.config.refresh_every)
+            .await
+            .map_err(internal)?;
+        let osv = jobs::osv(&st);
+        match tokio::time::timeout(
+            MATCH_ON_PUSH_TIMEOUT,
+            vulns::match_purls(&st.db, &osv, &stale),
+        )
+        .await
+        {
+            Ok(Ok(_)) => "done",
+            Ok(Err(e)) => {
+                tracing::warn!("matching deferred for {}: {e:#}", project.name);
+                "deferred"
+            }
+            Err(_) => {
+                tracing::warn!("matching deferred for {}: timed out", project.name);
+                "deferred"
+            }
+        }
+    };
+    jobs::snapshot_metrics(&st.db, Some(project.id))
+        .await
+        .map_err(internal)?;
+    let alerted = jobs::alert(&st, Some(project.id))
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!("alerting failed for {}: {e:#}", project.name);
+            0
+        });
+    let counts = sqlx::query!(
+        r#"SELECT count(*) FILTER (WHERE NOT suppressed) AS "findings!",
+                  count(*) FILTER (WHERE NOT suppressed AND kev) AS "kev!"
+           FROM findings WHERE project_id = $1"#,
+        project.id
+    )
+    .fetch_one(&st.db)
+    .await
+    .map_err(internal)?;
+
     Ok((
         StatusCode::CREATED,
-        Json(json!({ "project": project.name, "version": version, "components": purls.len() })),
+        Json(json!({
+            "project": project.name, "version": version, "components": count,
+            "matching": matching, "findings": counts.findings, "kev": counts.kev,
+            "alerted": alerted,
+        })),
     ))
 }
+
+// ---------------------------------------------------------------------------------------------
+// Findings, audit, VEX
+
+/// A REAL (32-bit) value with `digits` decimals: 0.99999 would print as 0.9999899864196777.
+fn round_to(value: f32, digits: i32) -> f64 {
+    let factor = 10f64.powi(digits);
+    (f64::from(value) * factor).round() / factor
+}
+
+#[derive(Deserialize)]
+struct FindingsQuery {
+    #[serde(default)]
+    suppressed: bool,
+}
+
+/// Findings of the project's latest release, KEV first, then by EPSS score and severity. Suppressed findings
+/// are left out unless `?suppressed=true`.
+async fn project_findings(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Query(q): Query<FindingsQuery>,
+) -> ApiResult<Json<Value>> {
+    let project_id = named_project(&st, &headers, &name).await?;
+    let rows = sqlx::query!(
+        r#"SELECT vuln_key AS "vuln_key!", vuln_ids AS "vuln_ids!", severity AS "severity!",
+                  cvss_score, kev AS "kev!", summary, purls AS "purls!", state, justification,
+                  detail, suppressed AS "suppressed!", epss, epss_percentile
+           FROM findings WHERE project_id = $1 AND ($2 OR NOT suppressed)
+           ORDER BY kev DESC, epss DESC NULLS LAST, severity DESC, vuln_key"#,
+        project_id,
+        q.suppressed,
+    )
+    .fetch_all(&st.db)
+    .await
+    .map_err(internal)?;
+    let findings: Vec<Value> = rows
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id": r.vuln_key,
+                "advisories": r.vuln_ids,
+                "severity": vulns::Severity::from_rank(r.severity).label().to_lowercase(),
+                // REAL is 32-bit: 9.8 would print as 9.800000190734863
+                "cvss": r.cvss_score.map(|s| (f64::from(s) * 10.0).round() / 10.0),
+                "kev": r.kev,
+                "epss": r.epss.map(|score| json!({
+                    "score": round_to(score, 5),
+                    "percentile": r.epss_percentile.map(|p| round_to(p, 5)),
+                })),
+                "summary": r.summary,
+                "components": r.purls,
+                "analysis": r.state.map(|state| json!({
+                    "state": state, "justification": r.justification, "detail": r.detail,
+                })),
+                "suppressed": r.suppressed,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "project": name, "findings": findings })))
+}
+
+#[derive(Deserialize)]
+struct AnalysisBody {
+    state: String,
+    justification: Option<String>,
+    detail: Option<String>,
+}
+
+/// Records an audit decision for a flaw (CVE ID, or advisory ID when it has no CVE).
+async fn put_analysis(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((name, vuln)): Path<(String, String)>,
+    Json(body): Json<AnalysisBody>,
+) -> ApiResult<Json<Value>> {
+    let project_id = named_project(&st, &headers, &name).await?;
+    let analysis = vex::Analysis::validate(
+        &body.state,
+        body.justification.as_deref(),
+        body.detail.as_deref(),
+    )
+    .map_err(bad_request)?;
+    // An advisory ID (GHSA-…) is recorded against the flaw it describes
+    let key = sqlx::query_scalar!(
+        "SELECT canonical_id FROM vulnerabilities WHERE id = $1",
+        vuln
+    )
+    .fetch_optional(&st.db)
+    .await
+    .map_err(internal)?
+    .unwrap_or(vuln);
+    vex::upsert(&st.db, project_id, &key, &analysis)
+        .await
+        .map_err(internal)?;
+    jobs::snapshot_metrics(&st.db, Some(project_id))
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!({
+        "project": name, "id": key, "state": analysis.state,
+        "justification": analysis.justification, "detail": analysis.detail,
+    })))
+}
+
+async fn delete_analysis(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path((name, vuln)): Path<(String, String)>,
+) -> ApiResult<StatusCode> {
+    let project_id = named_project(&st, &headers, &name).await?;
+    sqlx::query!(
+        "DELETE FROM analyses WHERE project_id = $1 AND vuln_key IN (
+             $2, (SELECT canonical_id FROM vulnerabilities WHERE id = $2))",
+        project_id,
+        vuln
+    )
+    .execute(&st.db)
+    .await
+    .map_err(internal)?;
+    jobs::snapshot_metrics(&st.db, Some(project_id))
+        .await
+        .map_err(internal)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn export_vex(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let project_id = named_project(&st, &headers, &name).await?;
+    Ok(Json(
+        vex::export(&st.db, project_id, &name)
+            .await
+            .map_err(internal)?,
+    ))
+}
+
+async fn import_vex(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+    Json(doc): Json<Value>,
+) -> ApiResult<Json<vex::ImportStats>> {
+    let project_id = named_project(&st, &headers, &name).await?;
+    let stats = vex::import(&st.db, project_id, &doc)
+        .await
+        .map_err(|e| bad_request(format!("{e:#}")))?;
+    jobs::snapshot_metrics(&st.db, Some(project_id))
+        .await
+        .map_err(internal)?;
+    Ok(Json(stats))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Policies
+
+async fn list_policies(State(st): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+    require_admin(&st, &headers)?;
+    let rows = sqlx::query!("SELECT id, name, kind, value FROM policies ORDER BY id")
+        .fetch_all(&st.db)
+        .await
+        .map_err(internal)?;
+    Ok(Json(json!(
+        rows.into_iter()
+            .map(|r| json!({ "id": r.id, "name": r.name, "kind": r.kind, "value": r.value }))
+            .collect::<Vec<_>>()
+    )))
+}
+
+#[derive(Deserialize)]
+struct NewPolicy {
+    name: String,
+    kind: String,
+    #[serde(default)]
+    value: String,
+}
+
+async fn create_policy(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<NewPolicy>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
+    require_admin(&st, &headers)?;
+    if body.name.trim().is_empty() {
+        return Err(bad_request("policy name is required"));
+    }
+    let value = policies::validate(&body.kind, &body.value).map_err(bad_request)?;
+    let id = sqlx::query_scalar!(
+        "INSERT INTO policies (name, kind, value) VALUES ($1, $2, $3) RETURNING id",
+        body.name.trim(),
+        body.kind,
+        value,
+    )
+    .fetch_one(&st.db)
+    .await
+    .map_err(internal)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "id": id, "name": body.name.trim(), "kind": body.kind, "value": value })),
+    ))
+}
+
+async fn delete_policy(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
+    require_admin(&st, &headers)?;
+    let deleted = sqlx::query!("DELETE FROM policies WHERE id = $1", id)
+        .execute(&st.db)
+        .await
+        .map_err(internal)?
+        .rows_affected();
+    if deleted == 0 {
+        return Err((StatusCode::NOT_FOUND, "policy not found".into()));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn project_violations(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(name): Path<String>,
+) -> ApiResult<Json<Vec<policies::Violation>>> {
+    let project_id = named_project(&st, &headers, &name).await?;
+    Ok(Json(
+        policies::violations(&st.db, Some(project_id))
+            .await
+            .map_err(internal)?,
+    ))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Jobs
+
+/// Admin only. Runs a job now, for external schedulers (Cloud Scheduler, cron…).
+async fn run_job(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Path(job): Path<String>,
+) -> ApiResult<Json<Value>> {
+    require_admin(&st, &headers)?;
+    if !jobs::JOBS.contains(&job.as_str()) {
+        return Err((
+            StatusCode::NOT_FOUND,
+            format!("unknown job, expected one of {:?}", jobs::JOBS),
+        ));
+    }
+    match jobs::run(&st, &job).await {
+        Ok(result) => Ok(Json(result)),
+        Err(e) => {
+            tracing::warn!("job {job} failed: {e:#}");
+            Err((StatusCode::BAD_GATEWAY, format!("job {job} failed: {e:#}")))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Helpers
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
@@ -211,83 +626,4 @@ fn bad_request(msg: impl Into<String>) -> ApiError {
 pub fn internal(e: impl std::fmt::Display) -> ApiError {
     tracing::error!("{e}");
     (StatusCode::INTERNAL_SERVER_ERROR, "internal error".into())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::{body::Body, http::Request};
-    use tower::ServiceExt;
-
-    async fn call(app: &Router, req: Request<Body>) -> (StatusCode, Value) {
-        let res = app.clone().oneshot(req).await.unwrap();
-        let status = res.status();
-        let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        (
-            status,
-            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
-        )
-    }
-
-    fn post_json(uri: &str, token: &str, body: Value) -> Request<Body> {
-        Request::post(uri)
-            .header("authorization", format!("Bearer {token}"))
-            .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap()
-    }
-
-    #[sqlx::test]
-    async fn project_creation_and_sbom_ingestion(db: PgPool) {
-        let app = router(AppState {
-            db: db.clone(),
-            admin_token_hash: Some(sha256_hex("admin")),
-        });
-
-        let new = json!({ "name": "demo" });
-        let (status, _) = call(&app, post_json("/api/projects", "nope", new.clone())).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-
-        let (status, body) = call(&app, post_json("/api/projects", "admin", new.clone())).await;
-        assert_eq!(status, StatusCode::CREATED);
-        let token = body["token"].as_str().unwrap().to_owned();
-
-        let (status, _) = call(&app, post_json("/api/projects", "admin", new)).await;
-        assert_eq!(status, StatusCode::CONFLICT);
-
-        let bom = json!({
-            "bomFormat": "CycloneDX",
-            "specVersion": "1.6",
-            "metadata": { "component": { "name": "demo", "version": "1.2.0" } },
-            "components": [
-                { "purl": "pkg:maven/org.a/b@1.0" },
-                { "purl": "pkg:npm/x@2.0", "components": [{ "purl": "pkg:npm/y@3.0" }] },
-                { "purl": "pkg:npm/x@2.0" },
-                { "name": "no-purl" }
-            ]
-        });
-
-        let (status, _) = call(&app, post_json("/api/sboms", "wrong", bom.clone())).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-
-        let (status, body) = call(&app, post_json("/api/sboms", &token, bom.clone())).await;
-        assert_eq!(status, StatusCode::CREATED);
-        assert_eq!(body["version"], "1.2.0");
-        assert_eq!(body["components"], 3);
-
-        // Re-push of the same release replaces it instead of duplicating
-        let (status, _) = call(&app, post_json("/api/sboms", &token, bom)).await;
-        assert_eq!(status, StatusCode::CREATED);
-        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM components")
-            .fetch_one(&db)
-            .await
-            .unwrap();
-        assert_eq!(rows, 3);
-
-        let no_version = json!({ "bomFormat": "CycloneDX", "components": [] });
-        let (status, _) = call(&app, post_json("/api/sboms", &token, no_version)).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-    }
 }

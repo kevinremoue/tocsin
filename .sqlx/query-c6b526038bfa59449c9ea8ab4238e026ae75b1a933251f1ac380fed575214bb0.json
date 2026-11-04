@@ -1,0 +1,30 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH d AS (SELECT COALESCE($4::text::date, current_date) AS day),\n           ins AS (\n               INSERT INTO epss_scores (cve_id, score, percentile, score_date, model_version)\n               SELECT u.cve, u.score, u.percentile, d.day, $5\n               FROM UNNEST($1::text[], $2::real[], $3::real[]) AS u (cve, score, percentile), d\n           )\n           UPDATE epss_sync SET model_version = $5, score_date = (SELECT day FROM d),\n                  etag = $6, last_modified = $7, downloaded_at = $8::text::timestamptz,\n                  checked_at = now(), last_error = NULL, last_attempt_at = now()\n           RETURNING to_char(score_date, 'YYYY-MM-DD') AS \"day!\"",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "day!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "Float4Array",
+        "Float4Array",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c6b526038bfa59449c9ea8ab4238e026ae75b1a933251f1ac380fed575214bb0"
+}

@@ -1,0 +1,80 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT vuln_key AS \"vuln_key!\", max(severity) AS \"severity!\", max(cvss_score) AS cvss_score,\n                  bool_or(kev) AS \"kev!\", max(epss) AS epss, (array_agg(summary ORDER BY summary IS NULL))[1] AS summary,\n                  array_agg(DISTINCT p.name ORDER BY p.name) AS \"projects!\",\n                  count(*) OVER () AS \"total!\"\n           FROM findings f JOIN projects p ON p.id = f.project_id\n           WHERE NOT f.suppressed AND (NOT $1 OR f.kev)\n             AND ($2::text IS NULL OR f.vuln_key ILIKE $2 OR f.summary ILIKE $2\n                  OR EXISTS (SELECT 1 FROM unnest(f.purls) u WHERE u ILIKE $2))\n           GROUP BY vuln_key\n           ORDER BY bool_or(kev) DESC, max(epss) DESC NULLS LAST, max(severity) DESC, count(*) DESC,\n                    vuln_key\n           LIMIT $3 OFFSET $4",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "vuln_key!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "vuln_key"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "severity!",
+        "type_info": "Int2",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "cvss_score",
+        "type_info": "Float4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "kev!",
+        "type_info": "Bool",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "epss",
+        "type_info": "Float4",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "summary",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "projects!",
+        "type_info": "TextArray",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "total!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Text",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      true,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "94aa5983869c3dbbe782bee13f048dea8dd1aacce11fdcf9a39493996841cae6"
+}

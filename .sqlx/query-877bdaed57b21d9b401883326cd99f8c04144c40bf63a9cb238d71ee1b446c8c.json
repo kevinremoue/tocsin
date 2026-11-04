@@ -1,0 +1,107 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT to_char(day, 'YYYY-MM-DD') AS \"day!\", critical, high, medium, low, unknown,\n                  kev, suppressed\n           FROM project_metrics WHERE project_id = $1 ORDER BY day DESC LIMIT 30",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "day!",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "critical",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "project_metrics",
+            "name": "critical"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "high",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "project_metrics",
+            "name": "high"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "medium",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "project_metrics",
+            "name": "medium"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "low",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "project_metrics",
+            "name": "low"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "unknown",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "project_metrics",
+            "name": "unknown"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "kev",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "project_metrics",
+            "name": "kev"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "suppressed",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "project_metrics",
+            "name": "suppressed"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      null,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "877bdaed57b21d9b401883326cd99f8c04144c40bf63a9cb238d71ee1b446c8c"
+}

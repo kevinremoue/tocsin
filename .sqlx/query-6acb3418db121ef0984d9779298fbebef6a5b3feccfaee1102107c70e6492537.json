@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT canonical_id FROM vulnerabilities WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "canonical_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "vulnerabilities",
+            "name": "canonical_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6acb3418db121ef0984d9779298fbebef6a5b3feccfaee1102107c70e6492537"
+}

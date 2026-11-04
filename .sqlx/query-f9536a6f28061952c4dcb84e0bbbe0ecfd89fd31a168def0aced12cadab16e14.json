@@ -1,0 +1,122 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT f.project_id AS \"project_id!\", p.name, f.vuln_key AS \"vuln_key!\",\n                  f.severity AS \"severity!\", f.kev AS \"kev!\", f.epss, f.summary,\n                  f.purls AS \"purls!\",\n                  r.rule AS \"rule!\"\n           FROM findings f\n           JOIN projects p ON p.id = f.project_id\n           CROSS JOIN LATERAL (VALUES\n               ('kev', $1 AND f.kev),\n               ('severity', $2::smallint IS NOT NULL AND f.severity >= $2),\n               ('epss', $4::real IS NOT NULL AND f.epss IS NOT NULL AND f.epss >= $4)\n           ) AS r (rule, applies)\n           WHERE r.applies AND NOT f.suppressed\n             AND ($3::bigint IS NULL OR f.project_id = $3)\n             AND NOT EXISTS (SELECT 1 FROM alerts a WHERE a.project_id = f.project_id\n                             AND a.vuln_key = f.vuln_key AND a.rule = r.rule)\n           ORDER BY p.name, f.kev DESC, f.epss DESC NULLS LAST, f.severity DESC, f.vuln_key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "project_id!",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "project_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "vuln_key!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "vuln_key"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "severity!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "severity"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "kev!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "kev"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "epss",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "epss"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "summary",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "summary"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "purls!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "purls"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "rule!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Bool",
+        "Int2",
+        "Int8",
+        "Float4"
+      ]
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "f9536a6f28061952c4dcb84e0bbbe0ecfd89fd31a168def0aced12cadab16e14"
+}

@@ -8,50 +8,7 @@ use reqwest::{StatusCode, header};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::PgPool;
-use std::{collections::BTreeMap, time::Duration};
-
-pub const DEFAULT_URL: &str =
-    "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json";
-const DEFAULT_SYNC_MINUTES: u64 = 6 * 60;
-
-pub struct Config {
-    pub url: String,
-    pub every: Duration,
-}
-
-impl Config {
-    /// Reads `TOCSIN_KEV_URL` and `TOCSIN_KEV_SYNC_MINUTES`.
-    pub fn from_env() -> anyhow::Result<Self> {
-        let url = std::env::var("TOCSIN_KEV_URL")
-            .ok()
-            .filter(|u| !u.is_empty())
-            .unwrap_or_else(|| DEFAULT_URL.into());
-        let minutes = match std::env::var("TOCSIN_KEV_SYNC_MINUTES") {
-            Ok(m) => m.parse::<u64>().ok().filter(|&m| m > 0).with_context(|| {
-                format!("TOCSIN_KEV_SYNC_MINUTES must be a positive integer, got {m:?}")
-            })?,
-            Err(_) => DEFAULT_SYNC_MINUTES,
-        };
-        Ok(Self {
-            url,
-            every: Duration::from_secs(minutes * 60),
-        })
-    }
-}
-
-pub fn http_client() -> reqwest::Result<reqwest::Client> {
-    // reqwest is built without a bundled crypto provider: use ring, which sqlx already depends on.
-    // Fails harmlessly when a provider is already installed (several clients, tests).
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    reqwest::Client::builder()
-        .user_agent(concat!(
-            "tocsin/",
-            env!("CARGO_PKG_VERSION"),
-            " (+https://github.com/kevinremoue/tocsin)"
-        ))
-        .timeout(Duration::from_secs(60))
-        .build()
-}
+use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,33 +43,6 @@ pub enum Outcome {
         /// Entries in the feed
         total: usize,
     },
-}
-
-/// Syncs forever, every `config.every`, starting now. Failures are logged and retried at the next tick.
-pub async fn run(db: PgPool, client: reqwest::Client, config: Config) {
-    let mut tick = tokio::time::interval(config.every);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
-        tick.tick().await;
-        match sync(&db, &client, &config.url).await {
-            Ok(Outcome::NotModified) => tracing::info!("KEV catalog unchanged"),
-            Ok(Outcome::Synced {
-                catalog_version,
-                new,
-                updated,
-                total,
-            }) => {
-                tracing::info!(
-                    "KEV catalog {catalog_version} synced: {} new, {updated} updated, {total} total",
-                    new.len()
-                );
-                if !new.is_empty() && new.len() <= 20 {
-                    tracing::info!("new KEV entries: {}", new.join(", "));
-                }
-            }
-            Err(e) => tracing::warn!("KEV sync failed: {e:#}"),
-        }
-    }
 }
 
 /// One sync attempt. Its result, success or error, is recorded in `kev_sync`.
@@ -324,7 +254,7 @@ mod tests {
             ),
         ))));
         let url = fake_cisa(feed.clone()).await;
-        let client = http_client().unwrap();
+        let client = crate::http::client().unwrap();
 
         let outcome = sync(&db, &client, &url).await.unwrap();
         assert_eq!(
@@ -386,7 +316,7 @@ mod tests {
     async fn records_failures_and_clears_them_on_success(db: PgPool) {
         let feed: Feed = Arc::new(Mutex::new(Err(503)));
         let url = fake_cisa(feed.clone()).await;
-        let client = http_client().unwrap();
+        let client = crate::http::client().unwrap();
 
         assert!(sync(&db, &client, &url).await.is_err());
         let error: Option<String> = sqlx::query_scalar("SELECT last_error FROM kev_sync")

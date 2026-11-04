@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT purl FROM components WHERE sbom_id = (\n             SELECT id FROM sboms WHERE project_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1\n         ) ORDER BY purl",
+  "query": "SELECT DISTINCT c.purl AS \"purl!\" FROM latest_sboms ls\n           JOIN components c ON c.sbom_id = ls.id ORDER BY 1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "purl",
+        "name": "purl!",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -16,13 +16,11 @@
       }
     ],
     "parameters": {
-      "Left": [
-        "Int8"
-      ]
+      "Left": []
     },
     "nullable": [
       false
     ]
   },
-  "hash": "bea05279fab3c2586edd5f852ff95df7f6c7f582127f346a718b7357a5cf7012"
+  "hash": "f258056076edf0742b8f5c745e31eeed55989509c19c844a7750ca881a0fd893"
 }

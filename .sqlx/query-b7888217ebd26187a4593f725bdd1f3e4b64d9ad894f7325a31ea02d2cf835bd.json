@@ -1,0 +1,173 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT vuln_key AS \"vuln_key!\", vuln_ids AS \"vuln_ids!\", severity AS \"severity!\",\n                  cvss_score, kev AS \"kev!\", summary, purls AS \"purls!\", state, justification,\n                  detail, suppressed AS \"suppressed!\", epss, epss_percentile\n           FROM findings WHERE project_id = $1 AND ($2 OR NOT suppressed)\n           ORDER BY kev DESC, epss DESC NULLS LAST, severity DESC, vuln_key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "vuln_key!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "vuln_key"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "vuln_ids!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "vuln_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "severity!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "severity"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "cvss_score",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "cvss_score"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "kev!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "kev"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "summary",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "summary"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "purls!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "purls"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "justification",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "justification"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "detail",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "detail"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "suppressed!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "suppressed"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "epss",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "epss"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "epss_percentile",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "epss_percentile"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "b7888217ebd26187a4593f725bdd1f3e4b64d9ad894f7325a31ea02d2cf835bd"
+}

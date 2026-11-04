@@ -1,0 +1,29 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.purl AS \"purl!\" FROM latest_sboms ls\n           JOIN components c ON c.sbom_id = ls.id\n           LEFT JOIN purl_scans s ON s.purl = c.purl\n           WHERE ls.project_id = $1\n             AND (s.scanned_at IS NULL OR s.scanned_at < now() - make_interval(secs => $2))",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "purl!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "components",
+            "name": "purl"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Float8"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "772ac01a9245ccd64dfefaedefd6dd74408a806bd9fb7ec1b4843400c5018e0d"
+}

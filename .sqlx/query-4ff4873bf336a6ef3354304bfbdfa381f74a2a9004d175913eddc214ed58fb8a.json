@@ -1,0 +1,59 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT e.cve_id, e.score, e.percentile, to_char(e.score_date, 'YYYY-MM-DD') AS \"date!\"\n           FROM epss_scores e\n           WHERE e.cve_id IN (SELECT unnest(cve_ids) FROM vulnerabilities WHERE canonical_id = $1)\n           ORDER BY e.score DESC, e.cve_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "cve_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "epss_scores",
+            "name": "cve_id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "score",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "epss_scores",
+            "name": "score"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "percentile",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "epss_scores",
+            "name": "percentile"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "date!",
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "4ff4873bf336a6ef3354304bfbdfa381f74a2a9004d175913eddc214ed58fb8a"
+}

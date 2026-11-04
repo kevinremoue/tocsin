@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.name, f.vuln_key AS \"vuln_key!\", f.purls AS \"purls!\", f.state\n           FROM findings f JOIN projects p ON p.id = f.project_id\n           WHERE f.vuln_ids && ARRAY(SELECT id FROM vulnerabilities WHERE $1 = ANY (cve_ids))\n           ORDER BY f.suppressed, p.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "vuln_key!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "vuln_key"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "purls!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "purls"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "state"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "3883867d1de6f8b5f2102436cb93c5b15eb46b9ad475205531033ccc508f4930"
+}

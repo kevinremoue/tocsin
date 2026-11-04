@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM analyses WHERE project_id = $1 AND vuln_key IN (\n             $2, (SELECT canonical_id FROM vulnerabilities WHERE id = $2))",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "42e267adf7f144ca64a4dd399c2dcaa8c35c193a9715afb361a2068df07fcd56"
+}

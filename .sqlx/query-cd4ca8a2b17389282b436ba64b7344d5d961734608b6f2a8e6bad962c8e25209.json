@@ -1,0 +1,125 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT vuln_key AS \"vuln_key!\", severity AS \"severity!\", cvss_score, kev AS \"kev!\",\n                  summary, purls AS \"purls!\", state, suppressed AS \"suppressed!\", epss\n           FROM findings WHERE project_id = $1 AND ($2 OR NOT suppressed)\n           ORDER BY kev DESC, epss DESC NULLS LAST, severity DESC, cvss_score DESC NULLS LAST, vuln_key",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "vuln_key!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "vuln_key"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "severity!",
+        "type_info": "Int2",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "severity"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "cvss_score",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "cvss_score"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "kev!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "kev"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "summary",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "summary"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "purls!",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "purls"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "suppressed!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "suppressed"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "epss",
+        "type_info": "Float4",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "epss"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Bool"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "cd4ca8a2b17389282b436ba64b7344d5d961734608b6f2a8e6bad962c8e25209"
+}

@@ -6,6 +6,10 @@ mdbook = "0.5.4"
 [env]
 # Local Postgres from docker-compose.yml (development credentials only)
 DATABASE_URL = "postgres://tocsin:tocsin@localhost:5433/tocsin"
+# `mise run dev`: run the periodic jobs (KEV sync, vulnerability refresh) inside the server
+TOCSIN_SCHEDULER = "true"
+# Development only: admin token for `mise run dev`, `mise run seed` and the dashboard login
+TOCSIN_ADMIN_TOKEN = "dev-admin-token"
 
 [tasks."db:up"]
 description = "Start the local Postgres"
@@ -19,6 +23,11 @@ run = "docker compose down"
 description = "Apply migrations to the local Postgres"
 depends = ["db:up"]
 run = "sqlx migrate run"
+
+[tasks."db:reset"]
+description = "Drop and recreate the local database (all data lost), then apply migrations"
+depends = ["db:up"]
+run = "sqlx database reset -y --force"
 
 [tasks."db:prepare"]
 description = "Refresh .sqlx/ (query metadata for offline builds); run after changing a query"
@@ -58,3 +67,66 @@ run = "mdbook serve docs --port 3001 --open"
 [tasks."docs:build"]
 description = "Build the documentation site into docs/book/"
 run = "mdbook build docs"
+
+[tasks.seed]
+description = "Load the example projects of examples/sboms/ into a running Tocsin (start it first with `mise run dev`)"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+url=${TOCSIN_URL:-http://localhost:3000}
+admin=${TOCSIN_ADMIN_TOKEN:?TOCSIN_ADMIN_TOKEN is not set}
+dir=examples/sboms
+
+for i in $(seq 1 60); do
+  curl -fs -o /dev/null "$url/health" && break
+  [ "$i" = 60 ] && { echo "Tocsin is not reachable at $url: start it with 'mise run dev'" >&2; exit 1; }
+  sleep 0.5
+done
+
+# api TOKEN METHOD PATH [DATA]: prints the response body, fails on HTTP errors
+api() {
+  local token=$1 method=$2 path=$3 data=${4:-}
+  local args=(-sS -X "$method" "$url$path" -H "Authorization: Bearer $token" -w '\n%{http_code}')
+  [ -n "$data" ] && args+=(-H 'Content-Type: application/json' --data-binary "$data")
+  local out code
+  out=$(curl "${args[@]}")
+  code=${out##*$'\n'}
+  out=${out%$'\n'*}
+  if [ "$code" -ge 400 ]; then echo "$method $path: HTTP $code: $out" >&2; return 1; fi
+  echo "$out"
+}
+
+echo "Syncing the KEV catalog…"
+api "$admin" POST /api/jobs/kev-sync >/dev/null
+
+for project in billing-api legacy-portal storefront reporting auth-gateway; do
+  out=$(curl -sS -X POST "$url/api/projects" -w '\n%{http_code}' \
+    -H "Authorization: Bearer $admin" -H 'Content-Type: application/json' -d "{\"name\":\"$project\"}")
+  code=${out##*$'\n'}
+  if [ "$code" = 409 ]; then
+    echo "Project $project already exists. To seed again: stop Tocsin, run 'mise run db:reset', start it again." >&2
+    exit 1
+  fi
+  [ "$code" = 201 ] || { echo "cannot create $project: $out" >&2; exit 1; }
+  token=$(echo "$out" | sed -n 's/.*"token":"\([0-9a-f]*\)".*/\1/p')
+  for sbom in $(ls "$dir/$project"-*.json | sort -V); do
+    printf '%-14s %s\n' "$project" "$(api "$token" POST /api/sboms "@$sbom")"
+  done
+done
+
+echo "Syncing EPSS scores…"
+api "$admin" POST /api/jobs/epss-sync >/dev/null
+
+echo "Adding policies and audit decisions…"
+api "$admin" POST /api/policies '{"name": "No GPL-3.0", "kind": "license", "value": "GPL-3.0-only"}' >/dev/null
+api "$admin" POST /api/policies '{"name": "No critical vulnerabilities", "kind": "severity", "value": "critical"}' >/dev/null
+api "$admin" POST /api/policies '{"name": "No actively exploited vulnerabilities", "kind": "kev"}' >/dev/null
+api "$admin" POST /api/policies '{"name": "No likely exploited vulnerabilities", "kind": "epss", "value": "50%"}' >/dev/null
+api "$admin" PUT /api/projects/storefront/analyses/CVE-2020-28500 \
+  '{"state": "not_affected", "justification": "code_not_reachable", "detail": "toNumber and trim are not used"}' >/dev/null
+api "$admin" PUT /api/projects/reporting/analyses/CVE-2019-14234 \
+  '{"state": "exploitable", "detail": "JSONField key lookups reach the vulnerable code"}' >/dev/null
+
+echo
+echo "Done. Open $url and log in with any user name and the admin token as password ($admin)."
+'''

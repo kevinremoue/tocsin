@@ -1,0 +1,87 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.name,\n                  ls.version AS \"version?\",\n                  to_char(ls.created_at, 'YYYY-MM-DD HH24:MI') AS \"released_at?\",\n                  (SELECT count(*) FROM components c WHERE c.sbom_id = ls.id) AS \"components!\",\n                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.kev) AS \"kev!\",\n                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 4) AS \"critical!\",\n                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 3) AS \"high!\",\n                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 2) AS \"medium!\",\n                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity <= 1) AS \"low!\"\n           FROM projects p\n           LEFT JOIN latest_sboms ls ON ls.project_id = p.id\n           LEFT JOIN findings f ON f.project_id = p.id\n           GROUP BY p.name, ls.id, ls.version, ls.created_at\n           ORDER BY p.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "version?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "latest_sboms",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "released_at?",
+        "type_info": "Text",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "components!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "kev!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "critical!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 6,
+        "name": "high!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 7,
+        "name": "medium!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 8,
+        "name": "low!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "bfcbbde1a0bfbc89f9d5807075e361b69c8c88a86a30e16bb7a6aa407e56f322"
+}

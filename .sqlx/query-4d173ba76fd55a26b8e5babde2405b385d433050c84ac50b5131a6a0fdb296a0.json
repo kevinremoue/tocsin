@@ -1,0 +1,66 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT p.name, ls.version AS \"version?\",\n                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed) AS \"findings!\",\n                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.kev) AS \"kev!\",\n                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 4) AS \"critical!\",\n                  count(f.vuln_key) FILTER (WHERE NOT f.suppressed AND f.severity = 3) AS \"high!\"\n           FROM projects p\n           LEFT JOIN latest_sboms ls ON ls.project_id = p.id\n           LEFT JOIN findings f ON f.project_id = p.id\n           GROUP BY p.name, ls.version ORDER BY p.name",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "projects",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "version?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "latest_sboms",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "findings!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "kev!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "critical!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 5,
+        "name": "high!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      true,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "4d173ba76fd55a26b8e5babde2405b385d433050c84ac50b5131a6a0fdb296a0"
+}

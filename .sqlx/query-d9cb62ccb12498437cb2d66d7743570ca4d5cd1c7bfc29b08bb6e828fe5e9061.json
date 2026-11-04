@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO components (sbom_id, purl, licenses)\n         SELECT $1, purl, COALESCE(string_to_array(NULLIF(licenses, ''), E'\n'), '{}')\n         FROM UNNEST($2::text[], $3::text[]) AS t (purl, licenses)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d9cb62ccb12498437cb2d66d7743570ca4d5cd1c7bfc29b08bb6e828fe5e9061"
+}

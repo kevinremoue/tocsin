@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM component_vulns cv WHERE NOT EXISTS (\n             SELECT 1 FROM latest_sboms ls JOIN components c ON c.sbom_id = ls.id\n             WHERE c.purl = cv.purl)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "2c3405009012145c3b494dfec3553c66bf6f328b81f35740858cc4a3557baa32"
+}

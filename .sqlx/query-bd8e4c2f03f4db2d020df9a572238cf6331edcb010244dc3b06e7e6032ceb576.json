@@ -1,0 +1,47 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT c.purl, c.licenses,\n                  (SELECT count(*) FROM component_vulns cv\n                   JOIN vulnerabilities v ON v.id = cv.vuln_id AND NOT v.withdrawn\n                   WHERE cv.purl = c.purl) AS \"advisories!\"\n           FROM latest_sboms ls JOIN components c ON c.sbom_id = ls.id\n           WHERE ls.project_id = $1 ORDER BY c.purl",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "purl",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "components",
+            "name": "purl"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "licenses",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "components",
+            "name": "licenses"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "advisories!",
+        "type_info": "Int8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "bd8e4c2f03f4db2d020df9a572238cf6331edcb010244dc3b06e7e6032ceb576"
+}
