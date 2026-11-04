@@ -12,7 +12,7 @@ categories = ["web-programming::http-server"]
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
-base64 = "0.22.1"
+base64 = "0.23.1"
 flate2 = "1"
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 getrandom = "0.4.3"
