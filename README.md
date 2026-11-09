@@ -20,10 +20,10 @@ It is a single 10 MB Rust binary using about 20 MB of memory, with Postgres as i
 - **Actively exploited first**: CVEs in the CISA KEV catalog are flagged everywhere and trigger alerts.
 - **Likely to be exploited next**: each finding's EPSS score, from FIRST's daily file.
 - **Alerts** on Google Chat, once per project and vulnerability: on KEV CVEs by default, and optionally above a severity or EPSS threshold.
-- **Auditing**: mark findings as not affected, false positive, resolved…, with CycloneDX VEX export and import.
+- **Auditing** from the dashboard or the API: mark findings as not affected, false positive, resolved…, with CycloneDX VEX export and import.
 - **Policies** on licenses, severity, KEV and EPSS, with their violations.
 - **Metrics**: per-project and portfolio counts, with daily history.
-- **Dashboard**: server-rendered, no JavaScript, protected by the admin token.
+- **Dashboard**: server-rendered and light (no frontend build, works without JavaScript); create projects, upload SBOMs, audit, manage policies and run jobs. Protected by the admin token.
 - **CI gating**: query a project's findings to fail a build when it ships a KEV CVE.
 
 ## Quick start

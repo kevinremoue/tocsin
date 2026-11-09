@@ -24,14 +24,14 @@
 | Severity and CVSS | ✅ (CVSS v3) | ✅ (v2, v3, v4, OWASP risk rating) |
 | EPSS scores | ✅ (with policies and alerts) | ✅ |
 | Actively exploited (CISA KEV) as a first-class signal | ✅ | ❌ (EPSS instead) |
-| Audit (analysis states, justifications) | ✅ (API) | ✅ (UI and API) |
+| Audit (analysis states, justifications) | ✅ (UI and API) | ✅ (UI and API) |
 | VEX export and import | ✅ CycloneDX | ✅ CycloneDX |
 | Policies | License, severity, KEV | License, license group, severity, component, age, coordinates, … |
 | Metrics and history | ✅ daily | ✅ |
 | Notifications | Google Chat | Slack, Teams, email, webhooks, Jira, … |
 | Users, teams, permissions | ❌ one admin token | ✅ LDAP, OIDC |
 | Project hierarchy, tags | ❌ | ✅ |
-| Dashboard | Server-rendered, read-only | Rich web application |
+| Dashboard | Server-rendered, works without JavaScript; projects, uploads, audit, VEX, policies and jobs | Rich web application |
 
 ## When to pick which
 

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT to_char(day, 'YYYY-MM-DD') AS \"day!\", critical, high, medium, low, unknown,\n                  kev, suppressed\n           FROM project_metrics WHERE project_id = $1 ORDER BY day DESC LIMIT 30",
+  "query": "SELECT to_char(day, 'YYYY-MM-DD') AS \"day!\", critical, high, medium, low, unknown, kev,\n                  suppressed\n           FROM (SELECT * FROM project_metrics WHERE project_id = $1 ORDER BY day DESC LIMIT 30) m\n           ORDER BY day",
   "describe": {
     "columns": [
       {
@@ -103,5 +103,5 @@
       false
     ]
   },
-  "hash": "877bdaed57b21d9b401883326cd99f8c04144c40bf63a9cb238d71ee1b446c8c"
+  "hash": "1056b69cfd57a7d8048b3fcf8f468efafe3d32874efdc899ec6edff1d7b32901"
 }

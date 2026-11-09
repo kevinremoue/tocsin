@@ -41,7 +41,11 @@ EPSS scores are free to use; FIRST asks for attribution, which Tocsin gives in t
 
 ## Auditing
 
-Not every finding is relevant: the vulnerable code may be unreachable, or the issue already mitigated. Record an **analysis** for a finding of a project:
+Not every finding is relevant: the vulnerable code may be unreachable, or the issue already mitigated. Record an **analysis** for a finding of a project.
+
+**From the dashboard**, signed in with the admin token: click the Analysis cell of a finding (on the project page, a vulnerability page or a KEV entry), choose the state, a justification and a detail, then **Save**.
+
+**From the API**, with the admin token or the project's token:
 
 ```sh
 curl -X PUT "$TOCSIN_URL/api/projects/my-service/analyses/CVE-2021-44228" \

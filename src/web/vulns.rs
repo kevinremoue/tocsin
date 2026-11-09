@@ -1,9 +1,12 @@
 use super::{
-    Nav, PAGE_SIZE, analysis_badge, epss, kev_badge, like_pattern, not_found, page, pager,
-    purl_list, safe_links, search_term, severity, url,
+    Audit, Nav, PAGE_SIZE, Viewer, audit_cell, epss, flash, kev_badge, like_pattern, not_found,
+    page, pager, purl_list, safe_links, search_term, severity, url,
 };
 use crate::api::{ApiResult, AppState, internal};
-use axum::extract::{Path, Query, State};
+use axum::{
+    Extension,
+    extract::{Path, Query, State},
+};
 use maud::{Markup, html};
 use serde::Deserialize;
 
@@ -16,7 +19,11 @@ pub struct ListQuery {
 }
 
 /// Every flaw affecting at least one project (unsuppressed), across the portfolio.
-pub async fn list(State(st): State<AppState>, Query(query): Query<ListQuery>) -> ApiResult<Markup> {
+pub async fn list(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    Query(query): Query<ListQuery>,
+) -> ApiResult<Markup> {
     let q = search_term(&query.q);
     let pattern = like_pattern(q);
     let kev_only = query.kev.is_some();
@@ -59,6 +66,7 @@ pub async fn list(State(st): State<AppState>, Query(query): Query<ListQuery>) ->
     };
 
     Ok(page(
+        &viewer,
         "Vulnerabilities",
         Nav::Vulns,
         html! {
@@ -96,9 +104,19 @@ pub async fn list(State(st): State<AppState>, Query(query): Query<ListQuery>) ->
     ))
 }
 
+#[derive(Deserialize)]
+pub struct DetailQuery {
+    done: Option<String>,
+}
+
 /// A flaw: its advisories (one per source), references, and the projects it affects.
 /// `id` is the canonical ID (usually a CVE) or any advisory ID.
-pub async fn detail(State(st): State<AppState>, Path(id): Path<String>) -> ApiResult<Markup> {
+pub async fn detail(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    Path(id): Path<String>,
+    Query(dq): Query<DetailQuery>,
+) -> ApiResult<Markup> {
     let key = sqlx::query_scalar!(
         "SELECT canonical_id FROM vulnerabilities WHERE id = $1 OR canonical_id = $1 LIMIT 1",
         id
@@ -144,7 +162,8 @@ pub async fn detail(State(st): State<AppState>, Path(id): Path<String>) -> ApiRe
     .map_err(internal)?;
 
     let affected = sqlx::query!(
-        r#"SELECT p.name, f.purls AS "purls!", f.state, f.suppressed AS "suppressed!"
+        r#"SELECT p.name, f.purls AS "purls!", f.state, f.justification, f.detail,
+                  f.suppressed AS "suppressed!"
            FROM findings f JOIN projects p ON p.id = f.project_id
            WHERE f.vuln_key = $1 ORDER BY f.suppressed, p.name"#,
         key
@@ -168,11 +187,13 @@ pub async fn detail(State(st): State<AppState>, Path(id): Path<String>) -> ApiRe
     );
 
     Ok(page(
+        &viewer,
         &key,
         Nav::Vulns,
         html! {
             p.muted { a href="/vulns" { "← Vulnerabilities" } }
             h1 { (key) " " (severity(worst)) " " @if !kev.is_empty() { (kev_badge()) } }
+            (flash(dq.done.as_deref()))
             @if let Some(s) = &summary { p { (s) } }
             @for k in &kev {
                 p.error {
@@ -198,7 +219,13 @@ pub async fn detail(State(st): State<AppState>, Path(id): Path<String>) -> ApiRe
                     tbody { @for a in &affected { tr {
                         td { a href={ "/projects/" (a.name) } { (a.name) } }
                         td { (purl_list(&a.purls)) }
-                        td { (analysis_badge(a.state.as_deref())) }
+                        td { (audit_cell(&viewer, &Audit {
+                            project: &a.name,
+                            vuln_key: &key,
+                            state: a.state.as_deref(),
+                            justification: a.justification.as_deref(),
+                            detail: a.detail.as_deref(),
+                        }, &format!("/vulns/{key}"))) }
                     } } }
                 } }
             }

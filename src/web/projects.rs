@@ -1,14 +1,30 @@
 use super::{
-    Nav, analysis_badge, card, epss, epss_status, kev_badge, kev_status, not_found, page,
-    purl_list, severity, url,
+    Audit, Nav, Viewer, audit_cell, card, chart, epss, epss_status, flash, kev_badge, kev_status,
+    like_pattern, not_found, page, purl_list, search_term, severity, url,
 };
 use crate::api::{ApiResult, AppState, internal};
-use axum::extract::{Path, Query, State};
+use crate::vulns::Severity;
+use axum::{
+    Extension, Json,
+    extract::{Path, Query, State},
+    http::header,
+    response::IntoResponse,
+};
 use maud::{Markup, html};
 use serde::Deserialize;
 use std::collections::HashMap;
 
-pub async fn index(State(st): State<AppState>) -> ApiResult<Markup> {
+/// Jobs that can be run from the dashboard, with what they do.
+const JOBS: [(&str, &str); 3] = [
+    ("kev-sync", "Sync the CISA KEV catalog"),
+    ("epss-sync", "Sync EPSS scores"),
+    ("refresh", "Re-match every latest release against OSV.dev"),
+];
+
+pub async fn index(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+) -> ApiResult<Markup> {
     let projects = sqlx::query!(
         r#"SELECT p.name,
                   ls.version AS "version?",
@@ -41,6 +57,7 @@ pub async fn index(State(st): State<AppState>) -> ApiResult<Markup> {
     let epss_status = epss_status(&st.db).await?;
 
     Ok(page(
+        &viewer,
         "Projects",
         Nav::Projects,
         html! {
@@ -57,7 +74,10 @@ pub async fn index(State(st): State<AppState>) -> ApiResult<Markup> {
                 (card(violations.values().sum::<usize>(), "Policy violations", None))
             }
             @if projects.is_empty() {
-                p.muted { "No projects yet. Create one with " code { "POST /api/projects" } "." }
+                p.muted {
+                    "No projects yet."
+                    @if !viewer.can_write { " Create one with " code { "POST /api/projects" } "." }
+                }
             } @else {
                 div.scroll { table {
                     thead { tr {
@@ -79,6 +99,35 @@ pub async fn index(State(st): State<AppState>) -> ApiResult<Markup> {
                     } } }
                 } }
             }
+
+            @if viewer.can_write {
+                div.panel {
+                    h3 { "New project" }
+                    form.stack method="post" action="/projects" {
+                        input type="text" name="name" required maxlength="100" pattern="[A-Za-z0-9._\\-]+"
+                            placeholder="my-service" aria-label="Project name"
+                            title="1-100 characters: letters, digits, dot, dash, underscore";
+                        button.primary type="submit" { "Create" }
+                        span.muted { "Its token, for CI, is shown once." }
+                    }
+                }
+                div.panel {
+                    h3 { "Jobs" }
+                    p.muted { "They also run on their schedule. Run one now, for example after a deployment." }
+                    table { tbody { @for (job, what) in JOBS { tr {
+                        td.nowrap { code { (job) } }
+                        td { (what) }
+                        td.nowrap {
+                            form.inline method="post" action={ "/jobs/" (job) } hx-post={ "/jobs/" (job) }
+                                hx-target="next .job-result" hx-disabled-elt="find button" {
+                                button type="submit" { "Run now" }
+                                " " span.htmx-indicator.muted { "running…" }
+                            }
+                            " " span.job-result {}
+                        }
+                    } } } }
+                }
+            }
         },
     ))
 }
@@ -92,10 +141,17 @@ fn count_cell(n: i64, class: &str) -> Markup {
 pub struct ProjectQuery {
     /// Checkbox-style flag: present to include suppressed findings
     suppressed: Option<String>,
+    q: Option<String>,
+    /// Present: only KEV findings
+    kev: Option<String>,
+    /// Minimum severity: critical, high, medium or low
+    severity: Option<String>,
+    done: Option<String>,
 }
 
 pub async fn project(
     State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
     Path(name): Path<String>,
     Query(query): Query<ProjectQuery>,
 ) -> ApiResult<Markup> {
@@ -105,20 +161,42 @@ pub async fn project(
         .map_err(internal)?
         .ok_or_else(|| not_found("project"))?;
     let show_suppressed = query.suppressed.is_some();
+    let q = search_term(&query.q);
+    let kev_only = query.kev.is_some();
+    let min_severity = query
+        .severity
+        .as_deref()
+        .and_then(Severity::parse)
+        .filter(|s| *s != Severity::Unknown);
+    let filtered = q.is_some() || kev_only || min_severity.is_some();
 
     let findings = sqlx::query!(
         r#"SELECT vuln_key AS "vuln_key!", severity AS "severity!", cvss_score, kev AS "kev!",
-                  summary, purls AS "purls!", state, suppressed AS "suppressed!", epss
-           FROM findings WHERE project_id = $1 AND ($2 OR NOT suppressed)
+                  summary, purls AS "purls!", state, justification, detail,
+                  suppressed AS "suppressed!", epss
+           FROM findings
+           WHERE project_id = $1 AND ($2 OR NOT suppressed)
+             AND ($3::text IS NULL OR vuln_key ILIKE $3 OR summary ILIKE $3
+                  OR EXISTS (SELECT 1 FROM unnest(purls) u WHERE u ILIKE $3))
+             AND (NOT $4 OR kev) AND severity >= $5
            ORDER BY kev DESC, epss DESC NULLS LAST, severity DESC, cvss_score DESC NULLS LAST, vuln_key"#,
         project_id,
         show_suppressed,
+        like_pattern(q),
+        kev_only,
+        min_severity.map(Severity::rank).unwrap_or(0),
     )
     .fetch_all(&st.db)
     .await
     .map_err(internal)?;
-    let suppressed_count = sqlx::query_scalar!(
-        r#"SELECT count(*) AS "n!" FROM findings WHERE project_id = $1 AND suppressed"#,
+    let counts = sqlx::query!(
+        r#"SELECT count(*) FILTER (WHERE NOT suppressed AND kev) AS "kev!",
+                  count(*) FILTER (WHERE NOT suppressed AND severity = 4) AS "critical!",
+                  count(*) FILTER (WHERE NOT suppressed AND severity = 3) AS "high!",
+                  count(*) FILTER (WHERE NOT suppressed AND severity = 2) AS "medium!",
+                  count(*) FILTER (WHERE NOT suppressed AND severity <= 1) AS "low!",
+                  count(*) FILTER (WHERE suppressed) AS "suppressed!"
+           FROM findings WHERE project_id = $1"#,
         project_id
     )
     .fetch_one(&st.db)
@@ -129,16 +207,17 @@ pub async fn project(
         .await
         .map_err(internal)?;
 
-    let history = sqlx::query!(
-        r#"SELECT to_char(day, 'YYYY-MM-DD') AS "day!", critical, high, medium, low, unknown,
-                  kev, suppressed
-           FROM project_metrics WHERE project_id = $1 ORDER BY day DESC LIMIT 30"#,
+    let history = sqlx::query_as!(
+        chart::Day,
+        r#"SELECT to_char(day, 'YYYY-MM-DD') AS "day!", critical, high, medium, low, unknown, kev,
+                  suppressed
+           FROM (SELECT * FROM project_metrics WHERE project_id = $1 ORDER BY day DESC LIMIT 30) m
+           ORDER BY day"#,
         project_id
     )
     .fetch_all(&st.db)
     .await
     .map_err(internal)?;
-
     let releases = sqlx::query!(
         r#"SELECT s.version,
                   to_char(s.created_at, 'YYYY-MM-DD HH24:MI') AS "released_at!",
@@ -164,44 +243,76 @@ pub async fn project(
     .await
     .map_err(internal)?;
 
-    let kev_count = findings.iter().filter(|f| f.kev && !f.suppressed).count();
-    let count = |rank: i16| {
-        findings
-            .iter()
-            .filter(|f| !f.suppressed && f.severity == rank)
-            .count()
-    };
+    let here = format!("/projects/{name}");
+    // This page with its current filters, to come back to after an audit
+    let return_to = url(
+        &here,
+        &[
+            (
+                "suppressed",
+                query
+                    .suppressed
+                    .clone()
+                    .map(|_| "on".into())
+                    .unwrap_or_default(),
+            ),
+            ("q", q.unwrap_or_default().to_owned()),
+            ("kev", if kev_only { "on".into() } else { String::new() }),
+            (
+                "severity",
+                min_severity
+                    .map(|s| s.label().to_lowercase())
+                    .unwrap_or_default(),
+            ),
+        ],
+    );
 
     Ok(page(
+        &viewer,
         &name,
         Nav::Projects,
         html! {
             p.muted { a href="/" { "← Projects" } }
             h1 { (name) " " @if let Some(r) = releases.first() { span.muted { (r.version) } } }
+            (flash(query.done.as_deref()))
             @if releases.is_empty() {
                 p.muted { "No SBOM received for this project yet." }
             } @else {
                 div.cards {
-                    (card(kev_count, "Actively exploited", Some("error")))
-                    (card(count(4), "Critical", Some("sev4")))
-                    (card(count(3), "High", Some("sev3")))
-                    (card(count(2), "Medium", Some("sev2")))
-                    (card(count(1) + count(0), "Low or unknown", Some("sev1")))
-                    (card(suppressed_count, "Suppressed", None))
+                    (card(counts.kev, "Actively exploited", Some("error")))
+                    (card(counts.critical, "Critical", Some("sev4")))
+                    (card(counts.high, "High", Some("sev3")))
+                    (card(counts.medium, "Medium", Some("sev2")))
+                    (card(counts.low, "Low or unknown", Some("sev1")))
+                    (card(counts.suppressed, "Suppressed", None))
                     (card(violations.len(), "Policy violations", None))
                 }
 
                 h2 { "Vulnerabilities " span.muted { "(" (findings.len()) ")" } }
-                p.muted {
-                    @if show_suppressed {
-                        "Including suppressed findings. " a href={ "/projects/" (name) } { "Hide them" }
-                    } @else if suppressed_count > 0 {
-                        (suppressed_count) " suppressed findings hidden. "
-                        a href=(url(&format!("/projects/{name}"), &[("suppressed", "on".into())])) { "Show them" }
+                form.filters method="get" action=(here) {
+                    input type="search" name="q" value=(q.unwrap_or_default())
+                        placeholder="CVE, summary or package" aria-label="Search";
+                    select name="severity" aria-label="Minimum severity" {
+                        option value="" { "Any severity" }
+                        @for s in [Severity::Critical, Severity::High, Severity::Medium, Severity::Low] {
+                            option value=(s.label().to_lowercase()) selected[min_severity == Some(s)] {
+                                (s.label()) " or higher"
+                            }
+                        }
                     }
+                    label { input type="checkbox" name="kev" checked[kev_only]; " KEV only" }
+                    label { input type="checkbox" name="suppressed" checked[show_suppressed]; " Include suppressed" }
+                    button type="submit" { "Filter" }
+                    @if filtered || show_suppressed { a href=(here) { "Clear" } }
+                }
+                @if !show_suppressed && counts.suppressed > 0 {
+                    p.muted { (counts.suppressed) " suppressed findings hidden." }
                 }
                 @if findings.is_empty() {
-                    p.muted { "No known vulnerability in the latest release." }
+                    p.muted {
+                        @if filtered { "No vulnerability matches these filters." }
+                        @else { "No known vulnerability in the latest release." }
+                    }
                 } @else {
                     div.scroll { table {
                         thead { tr {
@@ -218,12 +329,20 @@ pub async fn project(
                             td.num { (epss(f.epss)) }
                             td { (f.summary.as_deref().unwrap_or("")) }
                             td { (purl_list(&f.purls)) }
-                            td { (analysis_badge(f.state.as_deref())) }
+                            td { (audit_cell(&viewer, &Audit {
+                                project: &name,
+                                vuln_key: &f.vuln_key,
+                                state: f.state.as_deref(),
+                                justification: f.justification.as_deref(),
+                                detail: f.detail.as_deref(),
+                            }, &return_to)) }
                         } } }
                     } }
-                    p.muted {
-                        "Record an audit decision with " code { "PUT /api/projects/" (name) "/analyses/{id}" }
-                        ", or import a CycloneDX VEX document."
+                    @if !viewer.can_write {
+                        p.muted {
+                            "Record an audit decision with " code { "PUT /api/projects/" (name) "/analyses/{id}" }
+                            ", or import a CycloneDX VEX document."
+                        }
                     }
                 }
 
@@ -242,16 +361,52 @@ pub async fn project(
 
                 @if !history.is_empty() {
                     h2 { "History" }
-                    div.scroll { table {
-                        thead { tr {
-                            th { "Day" } th.num { "KEV" } th.num { "Critical" } th.num { "High" }
-                            th.num { "Medium" } th.num { "Low" } th.num { "Unknown" } th.num { "Suppressed" }
+                    (chart::history(&history))
+                    details {
+                        summary.muted { "Daily counts" }
+                        div.scroll { table {
+                            thead { tr {
+                                th { "Day" } th.num { "KEV" } th.num { "Critical" } th.num { "High" }
+                                th.num { "Medium" } th.num { "Low" } th.num { "Unknown" } th.num { "Suppressed" }
+                            } }
+                            tbody { @for h in history.iter().rev() { tr {
+                                td.nowrap { (h.day) } td.num { (h.kev) } td.num { (h.critical) } td.num { (h.high) }
+                                td.num { (h.medium) } td.num { (h.low) } td.num { (h.unknown) }
+                                td.num { (h.suppressed) }
+                            } } }
                         } }
-                        tbody { @for h in &history { tr {
-                            td.nowrap { (h.day) } td.num { (h.kev) } td.num { (h.critical) } td.num { (h.high) }
-                            td.num { (h.medium) } td.num { (h.low) } td.num { (h.unknown) } td.num { (h.suppressed) }
-                        } } }
-                    } }
+                    }
+                }
+            }
+
+            @if viewer.can_write {
+                div.panel {
+                    h3 { "Upload a release" }
+                    p.muted { "A CycloneDX JSON SBOM, gzipped or not. Uploading an existing version replaces it." }
+                    form.stack method="post" action={ (here) "/sboms" } enctype="multipart/form-data" {
+                        input type="file" name="file" required accept=".json,.gz,application/json,application/gzip"
+                            aria-label="SBOM file";
+                        input type="text" name="version" placeholder="Version (default: from the SBOM)"
+                            aria-label="Version";
+                        button.primary type="submit" { "Upload" }
+                    }
+                }
+            }
+            @if !releases.is_empty() {
+                div.panel {
+                    h3 { "VEX" }
+                    p {
+                        a.button href={ (here) "/vex.json" } download { "Download VEX" }
+                        " " span.muted { "The findings and their audit decisions, as CycloneDX 1.6." }
+                    }
+                    @if viewer.can_write {
+                        form.stack method="post" action={ (here) "/vex" } enctype="multipart/form-data" {
+                            input type="file" name="file" required accept=".json,.gz,application/json,application/gzip"
+                                aria-label="VEX file";
+                            button type="submit" { "Import VEX" }
+                            span.muted { "Imports the audit decisions of a CycloneDX VEX document." }
+                        }
+                    }
                 }
 
                 h2 { "Releases" }
@@ -276,4 +431,22 @@ pub async fn project(
             }
         },
     ))
+}
+
+/// The project's VEX document, as a download.
+pub async fn vex_download(
+    State(st): State<AppState>,
+    Path(name): Path<String>,
+) -> ApiResult<impl IntoResponse> {
+    let project_id = sqlx::query_scalar!("SELECT id FROM projects WHERE name = $1", name)
+        .fetch_optional(&st.db)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| not_found("project"))?;
+    let doc = crate::vex::export(&st.db, project_id, &name)
+        .await
+        .map_err(internal)?;
+    // The name is [A-Za-z0-9._-]: safe in the header
+    let disposition = format!("attachment; filename=\"{name}-vex.json\"");
+    Ok(([(header::CONTENT_DISPOSITION, disposition)], Json(doc)))
 }

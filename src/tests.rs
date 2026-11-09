@@ -888,3 +888,379 @@ async fn kev_list_filters_and_paginates(db: PgPool) {
     let (_, html) = h.raw("GET", "/kev?q=%25", None, None).await;
     assert!(html.contains("No entry matches"));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Dashboard actions
+
+/// A dashboard response: status, headers and body.
+struct Page {
+    status: StatusCode,
+    headers: axum::http::HeaderMap,
+    body: String,
+}
+
+impl Page {
+    fn header(&self, name: &str) -> &str {
+        self.headers
+            .get(name)
+            .map(|v| v.to_str().unwrap())
+            .unwrap_or("")
+    }
+}
+
+impl Harness {
+    async fn page(&self, req: Request<Body>) -> Page {
+        let res = self.app.clone().oneshot(req).await.unwrap();
+        let (parts, body) = res.into_parts();
+        let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+        Page {
+            status: parts.status,
+            headers: parts.headers,
+            body: String::from_utf8_lossy(&bytes).into_owned(),
+        }
+    }
+
+    /// A form post as a browser sends it: admin Basic credentials, same-origin fetch metadata.
+    async fn form(&self, uri: &str, fields: &[(&str, &str)], extra: &[(&str, &str)]) -> Page {
+        let mut req = Request::post(uri)
+            .header("authorization", "Basic dXNlcjphZG1pbg==") // user:admin
+            .header("sec-fetch-site", "same-origin")
+            .header("content-type", "application/x-www-form-urlencoded");
+        for (k, v) in extra {
+            req = req.header(*k, *v);
+        }
+        let body = serde_urlencoded::to_string(fields).unwrap();
+        self.page(req.body(Body::from(body)).unwrap()).await
+    }
+
+    /// A multipart upload: a `file` part and text fields.
+    async fn upload(&self, uri: &str, file: &[u8], fields: &[(&str, &str)]) -> Page {
+        let boundary = "tocsin-test-boundary";
+        let mut body = Vec::new();
+        for (name, value) in fields {
+            body.extend(
+                format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n")
+                    .as_bytes(),
+            );
+        }
+        body.extend(
+            format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"bom.json\"\r\nContent-Type: application/octet-stream\r\n\r\n").as_bytes(),
+        );
+        body.extend(file);
+        body.extend(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let req = Request::post(uri)
+            .header("authorization", "Basic dXNlcjphZG1pbg==")
+            .header("sec-fetch-site", "same-origin")
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .unwrap();
+        self.page(req).await
+    }
+
+    async fn get_page(&self, uri: &str, admin: bool) -> Page {
+        let mut req = Request::get(uri);
+        if admin {
+            req = req.header("authorization", "Basic dXNlcjphZG1pbg==");
+        }
+        self.page(req.body(Body::empty()).unwrap()).await
+    }
+}
+
+fn gzip_bytes(data: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    gz.write_all(data).unwrap();
+    gz.finish().unwrap()
+}
+
+#[sqlx::test]
+async fn dashboard_actions_cover_the_api(db: PgPool) {
+    let h = harness(db.clone(), |c| c.google_chat_webhook = None).await;
+
+    // Public dashboard: read-only for visitors, forms for the admin; security headers set
+    let visitor = h.get_page("/", false).await;
+    assert!(visitor.body.contains("Sign in") && !visitor.body.contains("New project"));
+    let admin = h.get_page("/", true).await;
+    assert!(admin.body.contains("New project") && !admin.body.contains("Sign in"));
+    assert!(
+        admin
+            .header("content-security-policy")
+            .contains("script-src 'self'")
+    );
+
+    // Embedded assets, cached forever under content-versioned paths
+    let css = admin
+        .body
+        .split("href=\"/static/tocsin-")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap();
+    let asset = h.get_page(&format!("/static/tocsin-{css}"), false).await;
+    assert_eq!(asset.status, StatusCode::OK);
+    assert!(asset.header("cache-control").contains("immutable"));
+    assert!(asset.header("content-type").starts_with("text/css"));
+    let htmx = h.get_page("/static/htmx-2.0.11.min.js", false).await;
+    assert!(htmx.status == StatusCode::OK && htmx.body.contains("htmx"));
+    assert_eq!(
+        h.get_page("/static/nope.js", false).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // New project: the token is shown once, not cached, and works for CI
+    let created = h.form("/projects", &[("name", "shop")], &[]).await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    assert_eq!(created.header("cache-control"), "no-store");
+    let token = created
+        .body
+        .split("class=\"token\">")
+        .nth(1)
+        .unwrap()
+        .get(..64)
+        .unwrap()
+        .to_owned();
+    h.push(&token, "1.0", &[LODASH]).await;
+    let taken = h.form("/projects", &[("name", "shop")], &[]).await;
+    assert_eq!(taken.status, StatusCode::CONFLICT);
+    assert!(taken.body.contains("project already exists"));
+
+    // SBOM upload, gzipped, with a version
+    let up = h
+        .upload(
+            "/projects/shop/sboms",
+            &gzip_bytes(bom(&[LOG4J, LODASH]).to_string().as_bytes()),
+            &[("version", "2.0")],
+        )
+        .await;
+    assert_eq!(up.status, StatusCode::CREATED, "{}", up.body);
+    assert!(up.body.contains("Release 2.0 uploaded"));
+    let bad = h.upload("/projects/shop/sboms", b"not json", &[]).await;
+    assert_eq!(bad.status, StatusCode::BAD_REQUEST);
+    assert!(bad.body.contains("not valid JSON"));
+
+    // The project page offers audit forms, filters and the history chart
+    let page = h.get_page("/projects/shop", true).await;
+    assert!(
+        page.body
+            .contains(r#"action="/projects/shop/analyses/CVE-2021-44228""#)
+    );
+    assert!(page.body.contains("<svg") && page.body.contains("Upload a release"));
+    let filtered = h.get_page("/projects/shop?severity=critical", true).await;
+    assert!(filtered.body.contains("CVE-2021-44228") && !filtered.body.contains("CVE-2020-28500"));
+    let none = h.get_page("/projects/shop?kev=on", true).await;
+    assert!(
+        none.body
+            .contains("No vulnerability matches these filters.")
+    );
+    let visitor = h.get_page("/projects/shop", false).await;
+    assert!(
+        !visitor.body.contains("analyses/CVE-2021-44228")
+            && !visitor.body.contains("Upload a release")
+    );
+
+    // Audit, plain post: redirect back with a fixed confirmation
+    let audited = h
+        .form(
+            "/projects/shop/analyses/CVE-2021-44228",
+            &[
+                ("state", "not_affected"),
+                ("justification", "code_not_reachable"),
+                ("detail", "JNDI disabled"),
+                ("return_to", "/projects/shop?severity=critical"),
+            ],
+            &[],
+        )
+        .await;
+    assert_eq!(audited.status, StatusCode::SEE_OTHER);
+    assert_eq!(
+        audited.header("location"),
+        "/projects/shop?severity=critical&done=audited"
+    );
+    let (_, findings) = h
+        .call(
+            "GET",
+            "/api/projects/shop/findings?suppressed=true",
+            Some("admin"),
+            None,
+        )
+        .await;
+    assert_eq!(findings["findings"][0]["analysis"]["state"], "not_affected");
+    assert!(
+        h.get_page("/projects/shop?done=audited", true)
+            .await
+            .body
+            .contains("Audit decision saved.")
+    );
+
+    // Audit with htmx, by advisory ID: the cell fragment comes back
+    let fragment = h
+        .form(
+            "/projects/shop/analyses/GHSA-jfh8-c2jp-5v3q",
+            &[
+                ("state", "in_triage"),
+                ("return_to", "/vulns/CVE-2021-44228"),
+            ],
+            &[("hx-request", "true")],
+        )
+        .await;
+    assert_eq!(fragment.status, StatusCode::OK);
+    assert!(fragment.body.contains("In triage") && !fragment.body.contains("<html"));
+    let invalid = h
+        .form(
+            "/projects/shop/analyses/CVE-2021-44228",
+            &[("state", "nonsense")],
+            &[("hx-request", "true")],
+        )
+        .await;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+    assert!(invalid.body.contains("invalid state") && invalid.body.contains("role=\"alert\""));
+    // Removal, and a return path that is not ours falls back to the project page
+    for evil in [
+        "https://evil.example/",
+        "//evil.example/",
+        "/projects/..\\evil",
+    ] {
+        let removed = h
+            .form(
+                "/projects/shop/analyses/CVE-2021-44228",
+                &[("state", "none"), ("return_to", evil)],
+                &[],
+            )
+            .await;
+        assert_eq!(removed.header("location"), "/projects/shop?done=audited");
+    }
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM analyses")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+
+    // VEX: download, then import
+    let vex = h.get_page("/projects/shop/vex.json", true).await;
+    assert!(vex.header("content-disposition").contains("shop-vex.json"));
+    assert!(vex.body.contains(r#""bomFormat":"CycloneDX""#));
+    let doc = json!({ "bomFormat": "CycloneDX", "specVersion": "1.6", "vulnerabilities": [
+        { "id": "CVE-2021-23337", "analysis": { "state": "false_positive" } },
+        { "id": "CVE-2020-28500" }
+    ] });
+    let imported = h
+        .upload("/projects/shop/vex", doc.to_string().as_bytes(), &[])
+        .await;
+    assert_eq!(imported.status, StatusCode::OK, "{}", imported.body);
+    assert!(
+        imported.body.contains("1 audit decisions imported") && imported.body.contains("Skipped")
+    );
+
+    // Policies: create (valid, invalid), delete with htmx and without
+    let created = h
+        .form(
+            "/policies",
+            &[("name", "No KEV"), ("kind", "kev"), ("value", "")],
+            &[],
+        )
+        .await;
+    assert_eq!(created.header("location"), "/policies?done=policy-created");
+    let invalid = h
+        .form(
+            "/policies",
+            &[("name", "Bad"), ("kind", "epss"), ("value", "2")],
+            &[],
+        )
+        .await;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+    h.form(
+        "/policies",
+        &[
+            ("name", "No critical"),
+            ("kind", "severity"),
+            ("value", "critical"),
+        ],
+        &[],
+    )
+    .await;
+    let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM policies ORDER BY id")
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    let page = h.get_page("/policies?done=policy-created", true).await;
+    assert!(page.body.contains("Policy created.") && page.body.contains("New policy"));
+    let gone = h
+        .form(
+            &format!("/policies/{}/delete", ids[0]),
+            &[],
+            &[("hx-request", "true")],
+        )
+        .await;
+    assert!(gone.status == StatusCode::OK && gone.body.is_empty());
+    let gone = h
+        .form(&format!("/policies/{}/delete", ids[1]), &[], &[])
+        .await;
+    assert_eq!(gone.header("location"), "/policies?done=policy-deleted");
+    let missing = h
+        .form(&format!("/policies/{}/delete", ids[1]), &[], &[])
+        .await;
+    assert_eq!(missing.status, StatusCode::NOT_FOUND);
+
+    // Jobs
+    let job = h
+        .form("/jobs/kev-sync", &[], &[("hx-request", "true")])
+        .await;
+    assert!(
+        job.status == StatusCode::OK && job.body.contains("Done:") && job.body.contains("synced")
+    );
+    let job = h.form("/jobs/refresh", &[], &[]).await;
+    assert!(job.body.contains("Job refresh done") && job.body.contains("purls"));
+    assert_eq!(
+        h.form("/jobs/nope", &[], &[]).await.status,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[sqlx::test]
+async fn dashboard_writes_need_admin_and_same_origin(db: PgPool) {
+    let h = harness(db.clone(), |c| c.google_chat_webhook = None).await;
+    let post = |headers: &[(&str, &str)]| {
+        let mut req =
+            Request::post("/projects").header("content-type", "application/x-www-form-urlencoded");
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        req.body(Body::from("name=shop")).unwrap()
+    };
+    const ADMIN: (&str, &str) = ("authorization", "Basic dXNlcjphZG1pbg==");
+
+    // A public dashboard is read-only: visitors are asked to sign in
+    let p = h.page(post(&[("sec-fetch-site", "same-origin")])).await;
+    assert_eq!(p.status, StatusCode::UNAUTHORIZED);
+    assert!(p.header("www-authenticate").starts_with("Basic"));
+    let login = h.get_page("/login", false).await;
+    assert_eq!(login.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(h.get_page("/login", true).await.header("location"), "/");
+
+    // Cross-site posts are refused, even with the admin's credentials
+    let p = h
+        .page(post(&[ADMIN, ("sec-fetch-site", "cross-site")]))
+        .await;
+    assert_eq!(p.status, StatusCode::FORBIDDEN);
+    let p = h
+        .page(post(&[ADMIN, ("origin", "https://evil.example")]))
+        .await;
+    assert_eq!(p.status, StatusCode::FORBIDDEN);
+    // The public URL is a trusted origin
+    let p = h
+        .page(post(&[ADMIN, ("origin", "https://tocsin.example")]))
+        .await;
+    assert_eq!(p.status, StatusCode::CREATED, "{}", p.body);
+
+    // Without an admin token configured, nothing can be changed
+    let h = harness(db, |c| {
+        c.admin_token_hash = None;
+        c.google_chat_webhook = None;
+    })
+    .await;
+    let p = h.page(post(&[("sec-fetch-site", "same-origin")])).await;
+    assert_eq!(p.status, StatusCode::FORBIDDEN);
+    assert!(!h.get_page("/", false).await.body.contains("New project"));
+}

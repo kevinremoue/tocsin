@@ -76,7 +76,8 @@ If you leave out `?version=`, Tocsin uses `metadata.component.version` from the 
 Go to <http://localhost:3000>. Your browser asks for credentials: use any user name, and the admin token as password.
 
 - **Projects** shows the portfolio: findings per project and severity, KEV first.
-- Click a project to see its vulnerabilities, policy violations, history, releases and components.
+- Click a project to see its vulnerabilities, policy violations, history, releases and components. From there you can also audit findings, upload another release and export or import VEX.
+- You can also create projects from the dashboard, manage **Policies**, and run the jobs from the **Projects** page.
 - **Vulnerabilities** lists every flaw across projects; **KEV catalog** browses the catalog and shows which entries affect you.
 
 ## Next steps

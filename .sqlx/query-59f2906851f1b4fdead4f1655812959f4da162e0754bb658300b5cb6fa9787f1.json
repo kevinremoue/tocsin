@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM analyses WHERE project_id = $1 AND vuln_key = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "59f2906851f1b4fdead4f1655812959f4da162e0754bb658300b5cb6fa9787f1"
+}

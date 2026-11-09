@@ -3,7 +3,13 @@
 //!
 //! When `TOCSIN_ADMIN_TOKEN` is set the dashboard requires it, through HTTP Basic auth (any user
 //! name, the token as password) or a bearer token, unless `TOCSIN_DASHBOARD_PUBLIC` is set.
+//! Changes (audit, uploads, policies, jobs) always require the admin token: a public dashboard
+//! is read-only. Forms are plain HTML posts that work without JavaScript; htmx, served from
+//! `/static/`, turns some of them into in-place updates. Cross-site posts are refused
+//! (`CsrfLayer`), and a Content-Security-Policy allows only Tocsin's own scripts and styles.
+mod actions;
 mod admin;
+mod chart;
 mod kev;
 mod projects;
 mod vulns;
@@ -11,93 +17,112 @@ mod vulns;
 use crate::api::{ApiResult, AppState, internal, sha256_hex};
 use crate::vulns::Severity;
 use axum::{
-    Router,
-    extract::{Request, State},
-    http::{HeaderMap, StatusCode, header},
+    Extension, Router,
+    extract::{Path, Request, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::get,
 };
 use base64::Engine;
-use maud::{DOCTYPE, Markup, PreEscaped, html};
+use maud::{DOCTYPE, Markup, html};
 use sqlx::PgPool;
+use std::sync::LazyLock;
 
 pub const PAGE_SIZE: i64 = 100;
 
-const CSS: &str = r#"
-:root { --bg:#fff; --fg:#1b1f24; --muted:#656d76; --line:#d8dee4; --accent:#0969da; --row:#f6f8fa; --err:#cf222e;
-        --crit:#8b0820; --high:#cf222e; --med:#bc4c00; --low:#9a6700; --unk:#6e7781; }
-@media (prefers-color-scheme: dark) {
-  :root { --bg:#0d1117; --fg:#e6edf3; --muted:#8d96a0; --line:#30363d; --accent:#4493f8; --row:#161b22; --err:#f85149;
-          --crit:#ff7b72; --high:#f85149; --med:#f0883e; --low:#d29922; --unk:#8d96a0; }
-}
-* { box-sizing: border-box; }
-body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, sans-serif; }
-header { border-bottom:1px solid var(--line); padding:12px 16px; display:flex; flex-wrap:wrap; gap:24px; align-items:baseline; }
-header a { color:var(--fg); text-decoration:none; }
-header a.brand { font-weight:700; }
-header nav { display:flex; flex-wrap:wrap; gap:16px; }
-header nav a { color:var(--muted); }
-header nav a:hover, header nav a.active { color:var(--fg); }
-main { max-width:1200px; margin:0 auto; padding:16px; }
-h1 { font-size:1.4rem; margin:8px 0 16px; }
-h2 { font-size:1.1rem; margin:28px 0 8px; }
-a { color:var(--accent); }
-.muted { color:var(--muted); }
-.error { color:var(--err); }
-.status { font-size:.9rem; margin:-8px 0 16px; }
-.scroll { overflow-x:auto; }
-table { width:100%; border-collapse:collapse; }
-th, td { text-align:left; padding:6px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
-th { color:var(--muted); font-weight:600; font-size:.85rem; white-space:nowrap; }
-td.nowrap { white-space:nowrap; }
-tbody tr:hover { background:var(--row); }
-td.num, th.num { text-align:right; white-space:nowrap; }
-code { font:13px ui-monospace, monospace; word-break:break-all; }
-.badge { display:inline-block; padding:0 8px; border-radius:10px; font-size:.8rem; font-weight:600; color:#fff; white-space:nowrap; }
-.badge.kev { background:var(--err); }
-.badge.state { background:var(--unk); }
-.sev { font-weight:600; white-space:nowrap; }
-.sev4 { color:var(--crit); } .sev3 { color:var(--high); } .sev2 { color:var(--med); } .sev1 { color:var(--low); } .sev0 { color:var(--unk); }
-.cards { display:flex; flex-wrap:wrap; gap:12px; margin:0 0 20px; }
-.card { border:1px solid var(--line); border-radius:8px; padding:10px 16px; min-width:110px; }
-.card .n { font-size:1.5rem; font-weight:700; }
-.card .l { color:var(--muted); font-size:.85rem; }
-form.filters { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin:0 0 12px; }
-form.filters input[type=search] { min-width:280px; padding:5px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); font:inherit; }
-form.filters button { padding:5px 14px; border:1px solid var(--line); border-radius:6px; background:var(--row); color:var(--fg); font:inherit; cursor:pointer; }
-.pager { display:flex; gap:16px; margin:12px 0; }
-dl { display:grid; grid-template-columns:max-content 1fr; gap:8px 24px; margin:0; }
-dt { color:var(--muted); font-weight:600; }
-dd { margin:0; }
-dd ul { margin:0; padding-left:18px; }
-footer { max-width:1200px; margin:24px auto; padding:12px 16px; border-top:1px solid var(--line); color:var(--muted); font-size:.85rem; }
-.epss-hi { color:var(--err); font-weight:600; }
-.details { white-space:pre-wrap; border-left:3px solid var(--line); padding-left:12px; }
-"#;
+/// Stylesheet and htmx, embedded in the binary. Their paths change with their content, so
+/// they can be cached forever.
+const CSS: &str = include_str!("static/tocsin.css");
+const HTMX: &str = include_str!("static/htmx-2.0.11.min.js");
+const HTMX_PATH: &str = "/static/htmx-2.0.11.min.js";
+static CSS_PATH: LazyLock<String> =
+    LazyLock::new(|| format!("/static/tocsin-{}.css", &sha256_hex(CSS)[..12]));
 
+/// htmx without `eval` (the CSP forbids it), and swapping error responses too, so that
+/// validation messages show in place.
+const HTMX_CONFIG: &str = r#"{"allowEval":false,"includeIndicatorStyles":false,"responseHandling":[{"code":"204","swap":false},{"code":"[2345]..","swap":true}]}"#;
+
+const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; \
+                   frame-ancestors 'none'; form-action 'self'; base-uri 'none'";
+
+/// Dashboard pages and actions, behind `require_auth`.
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(projects::index))
+        .route("/login", get(login))
         .route("/projects/{name}", get(projects::project))
+        .route("/projects/{name}/vex.json", get(projects::vex_download))
         .route("/vulns", get(vulns::list))
         .route("/vulns/{id}", get(vulns::detail))
         .route("/kev", get(kev::list))
         .route("/kev/{cve}", get(kev::entry))
         .route("/policies", get(admin::policies))
         .route("/alerts", get(admin::alerts))
+        .merge(actions::routes())
 }
 
-/// Middleware protecting the dashboard with the admin token.
-pub async fn require_auth(State(st): State<AppState>, req: Request, next: Next) -> Response {
-    let Some(expected) = &st.config.admin_token_hash else {
-        return next.run(req).await;
+/// Embedded assets, served without authentication (the login prompt needs no asset).
+pub fn static_routes() -> Router<AppState> {
+    Router::new().route("/static/{file}", get(asset))
+}
+
+async fn asset(Path(file): Path<String>) -> Response {
+    let (body, content_type) = match format!("/static/{file}") {
+        p if p == HTMX_PATH => (HTMX, "text/javascript; charset=utf-8"),
+        p if p == *CSS_PATH => (CSS, "text/css; charset=utf-8"),
+        _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    if st.config.dashboard_public
-        || presented_token(req.headers()).is_some_and(|t| sha256_hex(&t) == *expected)
-    {
-        return next.run(req).await;
+    (
+        [
+            (header::CONTENT_TYPE, content_type),
+            (header::CACHE_CONTROL, "public, max-age=31536000, immutable"),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// Who is looking at the dashboard, set by `require_auth` for every page and action.
+#[derive(Clone, Copy)]
+pub struct Viewer {
+    /// Presented the admin token: may audit, upload, manage policies and run jobs.
+    pub can_write: bool,
+    /// An admin token is configured but was not presented (public dashboard): offer to sign in.
+    pub can_sign_in: bool,
+}
+
+/// Middleware protecting the dashboard with the admin token. Also sets the security headers.
+pub async fn require_auth(State(st): State<AppState>, mut req: Request, next: Next) -> Response {
+    let admin = st.config.admin_token_hash.as_ref().is_some_and(|expected| {
+        presented_token(req.headers()).is_some_and(|t| sha256_hex(&t) == *expected)
+    });
+    let configured = st.config.admin_token_hash.is_some();
+    if configured && !admin && !st.config.dashboard_public {
+        return ask_credentials();
     }
+    req.extensions_mut().insert(Viewer {
+        can_write: admin,
+        can_sign_in: configured && !admin,
+    });
+    let mut res = next.run(req).await;
+    let headers = res.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(CSP),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    res
+}
+
+fn ask_credentials() -> Response {
     (
         StatusCode::UNAUTHORIZED,
         [(
@@ -107,6 +132,15 @@ pub async fn require_auth(State(st): State<AppState>, req: Request, next: Next) 
         "authentication required: use the admin token as password",
     )
         .into_response()
+}
+
+/// Sign-in link of a public dashboard: asks the browser for the admin token, then goes home.
+async fn login(Extension(viewer): Extension<Viewer>) -> Response {
+    if viewer.can_sign_in {
+        ask_credentials()
+    } else {
+        Redirect::to("/").into_response()
+    }
 }
 
 /// Token from `Authorization: Basic` (the password) or `Authorization: Bearer`.
@@ -131,7 +165,7 @@ pub enum Nav {
     Alerts,
 }
 
-pub fn page(title: &str, nav: Nav, body: Markup) -> Markup {
+pub fn page(viewer: &Viewer, title: &str, nav: Nav, body: Markup) -> Markup {
     let link = |href: &str, label: &str, item: Nav| {
         html! { a href=(href) class=[(nav == item).then_some("active")] { (label) } }
     };
@@ -141,8 +175,12 @@ pub fn page(title: &str, nav: Nav, body: Markup) -> Markup {
             head {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
+                meta name="htmx-config" content=(HTMX_CONFIG);
                 title { (title) " · Tocsin" }
-                style { (PreEscaped(CSS)) }
+                // No favicon request (the CSP allows data: images)
+                link rel="icon" href="data:,";
+                link rel="stylesheet" href=(*CSS_PATH);
+                script src=(HTMX_PATH) defer {}
             }
             body {
                 header {
@@ -153,6 +191,7 @@ pub fn page(title: &str, nav: Nav, body: Markup) -> Markup {
                         (link("/kev", "KEV catalog", Nav::Kev))
                         (link("/policies", "Policies", Nav::Policies))
                         (link("/alerts", "Alerts", Nav::Alerts))
+                        @if viewer.can_sign_in { a href="/login" { "Sign in" } }
                     }
                 }
                 main { (body) }
@@ -164,6 +203,40 @@ pub fn page(title: &str, nav: Nav, body: Markup) -> Markup {
             }
         }
     }
+}
+
+/// Fixed confirmation messages, chosen by the `done` query parameter after a redirect (the
+/// parameter is never echoed).
+pub fn flash(done: Option<&str>) -> Markup {
+    let message = match done {
+        Some("audited") => "Audit decision saved.",
+        Some("policy-created") => "Policy created.",
+        Some("policy-deleted") => "Policy deleted.",
+        _ => return html! {},
+    };
+    html! { p.flash role="status" { (message) } }
+}
+
+/// Is this request from htmx (an in-place update) rather than a plain form post?
+pub fn is_htmx(headers: &HeaderMap) -> bool {
+    headers.get("hx-request").is_some_and(|v| v == "true")
+}
+
+/// An error, as a page or, for htmx, as a fragment swapped where the result would go.
+pub fn error_response(
+    viewer: &Viewer,
+    headers: &HeaderMap,
+    (status, message): (StatusCode, String),
+) -> Response {
+    if is_htmx(headers) {
+        return (status, html! { span.error role="alert" { (message) } }).into_response();
+    }
+    let body = html! {
+        h1 { "Something went wrong" }
+        p.flash.error role="alert" { (message) }
+        p { a href="/" { "← Projects" } }
+    };
+    (status, page(viewer, "Error", Nav::Projects, body)).into_response()
 }
 
 pub fn severity(rank: i16) -> Markup {
@@ -192,6 +265,61 @@ pub fn analysis_badge(state: Option<&str>) -> Markup {
     match state {
         Some(state) => html! { span.badge.state { (crate::vex::state_label(state)) } },
         None => html! { span.muted { "—" } },
+    }
+}
+
+/// "Code not reachable" for `code_not_reachable`.
+pub fn justification_label(j: &str) -> String {
+    let text = j.replace('_', " ");
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => text,
+    }
+}
+
+/// The audit state of a finding of `project`, as a badge; for admins, a badge that opens a form
+/// recording the decision. `return_to` is the page to come back to after a plain form post.
+/// Without JavaScript the `<details>` element still opens and the form posts normally.
+pub struct Audit<'a> {
+    pub project: &'a str,
+    pub vuln_key: &'a str,
+    pub state: Option<&'a str>,
+    pub justification: Option<&'a str>,
+    pub detail: Option<&'a str>,
+}
+
+pub fn audit_cell(viewer: &Viewer, a: &Audit, return_to: &str) -> Markup {
+    if !viewer.can_write {
+        return analysis_badge(a.state);
+    }
+    let action = format!("/projects/{}/analyses/{}", a.project, a.vuln_key);
+    html! {
+        details.audit {
+            summary title="Record an audit decision" {
+                @if a.state.is_some() { (analysis_badge(a.state)) } @else { span.muted { "Audit" } }
+            }
+            form method="post" action=(action) hx-post=(action) hx-target="closest td"
+                hx-swap="innerHTML" hx-disabled-elt="find button" {
+                input type="hidden" name="return_to" value=(return_to);
+                select name="state" aria-label="State" {
+                    option value="none" selected[a.state.is_none()] { "Not audited" }
+                    @for s in crate::vex::STATES {
+                        option value=(s) selected[a.state == Some(s)] { (crate::vex::state_label(s)) }
+                    }
+                }
+                select name="justification" aria-label="Justification" {
+                    option value="" selected[a.justification.is_none()] { "No justification" }
+                    @for j in crate::vex::JUSTIFICATIONS {
+                        option value=(j) selected[a.justification == Some(j)] { (justification_label(j)) }
+                    }
+                }
+                textarea name="detail" aria-label="Detail" placeholder="Detail (optional)" {
+                    (a.detail.unwrap_or(""))
+                }
+                button.primary type="submit" { "Save" }
+            }
+        }
     }
 }
 

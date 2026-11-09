@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Daily metrics per project.
 - Findings API for CI gating: `GET /api/projects/{name}/findings`.
 - Dashboard: portfolio, projects, vulnerabilities, KEV catalog, policies, alerts; protected by the admin token.
+- Dashboard actions, admin only: audit findings in place, create projects (token shown once), upload SBOMs (gzip accepted), export and import VEX, create and delete policies, run jobs; findings filters and a history chart. Forms work without JavaScript; htmx (embedded) updates pages in place. Cross-site posts are refused, and pages carry a Content-Security-Policy.
 - Commands `serve`, `migrate`, `kev-sync`, `epss-sync` and `refresh`; jobs also over `POST /api/jobs/{job}`; optional in-process scheduler (`TOCSIN_SCHEDULER`). Graceful shutdown on SIGTERM.
 - Distroless Docker image, Docker Compose setup, documentation site with a Cloud Run guide.
 

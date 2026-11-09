@@ -18,7 +18,7 @@ Current state (all of it is covered by `docs/`, the user-facing reference):
 - `src/jobs.rs`: `kev-sync`, `epss-sync` and `refresh` jobs (each ends with alert evaluation; `kev-sync` and `refresh` also record metrics), `snapshot_metrics`, the optional in-process `scheduler`.
 - `src/alerts.rs`: `Notifier` trait, `GoogleChat`, `evaluate()` (advisory lock against duplicate sends across instances; an alert is recorded only after delivery; no notifier = nothing evaluated).
 - `src/vex.rs`: audit states/justifications, analysis upsert, CycloneDX VEX export/import. `src/policies.rs`: policy validation and the violations query.
-- `src/web/`: maud SSR dashboard (`mod.rs`: layout, CSS, helpers, `require_auth` Basic/bearer middleware; `projects.rs`, `vulns.rs`, `kev.rs`, `admin.rs`). Every value is escaped; links from feeds go through `safe_links` (http(s) only). Dates are formatted in SQL (`to_char`), so there is no chrono/time dependency.
+- `src/web/`: maud SSR dashboard. `mod.rs`: layout, helpers, `audit_cell`, `require_auth` (Basic/bearer; sets the `Viewer` extension and the CSP/security headers), embedded assets served from `/static/` (`static/tocsin.css` under a content-hash path, `static/htmx-<version>.min.js`, vendored, 0BSD). `actions.rs`: every POST (audit, projects, SBOM/VEX uploads, policies, jobs); they reuse the API's functions (`api::new_project`, `api::ingest`, `vex::record`, `api::new_policy`, `api::run_job_now`…). Writes need `Viewer::can_write` (admin token presented), even on a public dashboard; `CsrfLayer` refuses cross-site posts. Plain posts redirect with a fixed `?done=` message or render a result page; htmx posts (`HX-Request`) get a fragment. The CSP forbids inline scripts and styles: no `style=` attributes, no inline JS (htmx runs with `allowEval: false`). `chart.rs`: server-drawn SVG. `projects.rs`, `vulns.rs`, `kev.rs`, `admin.rs`: pages. Every value is escaped; links from feeds go through `safe_links` (http(s) only). Dates are formatted in SQL (`to_char`), so there is no chrono/time dependency.
 - `src/tests.rs`: end-to-end tests with fake OSV, CISA, EPSS and Google Chat servers (local axum). No test touches the network.
 - reqwest is built with `rustls-no-provider`; `http::client()` installs the `ring` provider sqlx already uses (no aws-lc-rs).
 
@@ -66,4 +66,4 @@ The project is public, dual-licensed MIT OR Apache-2.0. Everything in the repo (
 
   Send each (project, CVE) pair only once.
 - **Alerting:** Google Chat webhook for now. Keep the notifier pluggable, because other channels may follow.
-- **Interface:** REST API plus a small server-side-rendered dashboard; there is no SPA.
+- **Interface (decided 2026-11-05):** REST API plus a server-rendered dashboard (maud) with htmx for in-place updates; no SPA, no Node toolchain, assets embedded in the binary. Every API action is also available in the dashboard, with forms that work without JavaScript.

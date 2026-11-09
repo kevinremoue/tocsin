@@ -169,13 +169,18 @@ No authentication. `200` when the database is reachable, `503` otherwise.
 
 The dashboard pages require the admin token, as the password of HTTP Basic auth (any user name) or as a bearer token, unless `TOCSIN_DASHBOARD_PUBLIC=true`.
 
+Signed in with the admin token, the dashboard can do everything the API does: create projects, upload SBOMs, audit findings, export and import VEX, manage policies and run jobs. **Changes always require the admin token**: a public dashboard is read-only, with a **Sign in** link that asks for it. Without `TOCSIN_ADMIN_TOKEN`, nothing can be changed from the dashboard.
+
+The forms are plain HTML and work without JavaScript; [htmx](https://htmx.org), embedded in the binary, updates the page in place where it helps (audit decisions, jobs, policy deletion). Cross-site form posts are refused (`Sec-Fetch-Site` and `Origin` checks; `TOCSIN_PUBLIC_URL` is a trusted origin), and a Content-Security-Policy allows only Tocsin's own scripts and styles. Behind a reverse proxy, forward the `Host` and `Origin` headers unchanged.
+
 | Page | Content |
 |---|---|
-| `/` | Portfolio: KEV and EPSS sync status, totals, and each project's latest release, findings per severity, KEV count, violations. |
-| `/projects/{name}` | Findings (`?suppressed=on` to include suppressed ones), policy violations, daily history, releases, components with licenses. |
+| `/` | Portfolio: KEV and EPSS sync status, totals, and each project's latest release, findings per severity, KEV count, violations. For the admin: new project form (its token is shown once), and buttons to run the jobs. |
+| `/projects/{name}` | Findings with their audit forms (`q` searches, `severity` sets a minimum, `kev=on`, `suppressed=on`), policy violations, history chart, SBOM upload, VEX download and import, releases, components with licenses. |
+| `/projects/{name}/vex.json` | The project's VEX document, as a download. |
 | `/vulns` | Every flaw affecting a project. `q` searches, `kev=on` keeps KEV ones, `page` paginates. |
-| `/vulns/{id}` | A flaw: affected projects, advisories, details, references. `{id}` is the CVE or an advisory ID. |
+| `/vulns/{id}` | A flaw: affected projects (with audit forms), advisories, details, references. `{id}` is the CVE or an advisory ID. |
 | `/kev` | The KEV catalog. `q` searches, `ransomware=on`, `affecting=on` (only entries affecting a project), `page`. |
 | `/kev/{cve}` | A KEV entry, and the projects it affects. |
-| `/policies` | Policies and their violations. |
+| `/policies` | Policies and their violations; for the admin, forms to create and delete policies. |
 | `/alerts` | Alerts sent, and the current rules. |

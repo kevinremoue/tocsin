@@ -72,6 +72,38 @@ impl Analysis {
     }
 }
 
+/// Records (`Some`) or removes (`None`) the decision on a flaw, named by its canonical ID or
+/// any advisory ID, then records today's metrics. Returns the canonical ID.
+pub async fn record(
+    db: &PgPool,
+    project_id: i64,
+    vuln: &str,
+    analysis: Option<&Analysis>,
+) -> sqlx::Result<String> {
+    // An advisory ID (GHSA-…) is recorded against the flaw it describes
+    let key = sqlx::query_scalar!(
+        "SELECT canonical_id FROM vulnerabilities WHERE id = $1",
+        vuln
+    )
+    .fetch_optional(db)
+    .await?
+    .unwrap_or_else(|| vuln.to_owned());
+    match analysis {
+        Some(a) => upsert(db, project_id, &key, a).await?,
+        None => {
+            sqlx::query!(
+                "DELETE FROM analyses WHERE project_id = $1 AND vuln_key = $2",
+                project_id,
+                key
+            )
+            .execute(db)
+            .await?;
+        }
+    }
+    crate::jobs::snapshot_metrics(db, Some(project_id)).await?;
+    Ok(key)
+}
+
 pub async fn upsert(
     db: &PgPool,
     project_id: i64,

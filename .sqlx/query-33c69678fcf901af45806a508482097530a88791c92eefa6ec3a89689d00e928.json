@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT vuln_key AS \"vuln_key!\", severity AS \"severity!\", cvss_score, kev AS \"kev!\",\n                  summary, purls AS \"purls!\", state, suppressed AS \"suppressed!\", epss\n           FROM findings WHERE project_id = $1 AND ($2 OR NOT suppressed)\n           ORDER BY kev DESC, epss DESC NULLS LAST, severity DESC, cvss_score DESC NULLS LAST, vuln_key",
+  "query": "SELECT vuln_key AS \"vuln_key!\", severity AS \"severity!\", cvss_score, kev AS \"kev!\",\n                  summary, purls AS \"purls!\", state, justification, detail,\n                  suppressed AS \"suppressed!\", epss\n           FROM findings\n           WHERE project_id = $1 AND ($2 OR NOT suppressed)\n             AND ($3::text IS NULL OR vuln_key ILIKE $3 OR summary ILIKE $3\n                  OR EXISTS (SELECT 1 FROM unnest(purls) u WHERE u ILIKE $3))\n             AND (NOT $4 OR kev) AND severity >= $5\n           ORDER BY kev DESC, epss DESC NULLS LAST, severity DESC, cvss_score DESC NULLS LAST, vuln_key",
   "describe": {
     "columns": [
       {
@@ -82,6 +82,28 @@
       },
       {
         "ordinal": 7,
+        "name": "justification",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "justification"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "detail",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "detail"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
         "name": "suppressed!",
         "type_info": "Bool",
         "origin": {
@@ -92,7 +114,7 @@
         }
       },
       {
-        "ordinal": 8,
+        "ordinal": 10,
         "name": "epss",
         "type_info": "Float4",
         "origin": {
@@ -106,7 +128,10 @@
     "parameters": {
       "Left": [
         "Int8",
-        "Bool"
+        "Bool",
+        "Text",
+        "Bool",
+        "Int2"
       ]
     },
     "nullable": [
@@ -118,8 +143,10 @@
       true,
       true,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "cd4ca8a2b17389282b436ba64b7344d5d961734608b6f2a8e6bad962c8e25209"
+  "hash": "33c69678fcf901af45806a508482097530a88791c92eefa6ec3a89689d00e928"
 }

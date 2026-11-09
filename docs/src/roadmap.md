@@ -12,6 +12,7 @@ Tocsin works end to end but has not been tagged as a release yet. Version 0.1.0 
 - [x] Policies: license, severity, KEV
 - [x] Metrics with daily history
 - [x] Dashboard: portfolio, projects, vulnerabilities, KEV catalog, policies, alerts; protected by the admin token
+- [x] Dashboard actions: audit, project creation, SBOM upload, VEX export and import, policies, jobs; history chart
 - [x] Serverless-ready: jobs as commands or HTTP endpoints, migrations as a separate step, Cloud Run guide
 - [x] Docker image (distroless), documentation site
 - [x] EPSS scores next to KEV, with an EPSS policy and alert rule
@@ -21,7 +22,6 @@ Tocsin works end to end but has not been tagged as a release yet. Version 0.1.0 
 - [ ] Validate the Cloud Run guide on a real deployment, then tag 0.1.0
 - [ ] More notification channels: Slack, Microsoft Teams, email, generic webhook
 - [ ] CVSS v4 scoring
-- [ ] Audit from the dashboard (today: API and VEX only)
 - [ ] Users and roles (read-only vs admin), OIDC login
 
 ## Later

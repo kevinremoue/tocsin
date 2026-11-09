@@ -11,10 +11,10 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::{sync::Arc, time::Duration};
-use tower_http::decompression::RequestDecompressionLayer;
+use tower_http::{csrf::CsrfLayer, decompression::RequestDecompressionLayer};
 
 /// Largest SBOM or VEX document accepted, once decompressed.
-const MAX_DOCUMENT: usize = 50 * 1024 * 1024;
+pub const MAX_DOCUMENT: usize = 50 * 1024 * 1024;
 /// Time an SBOM push may spend matching against the vulnerability sources. Past it, the
 /// push still succeeds and the next refresh job completes the matching.
 const MATCH_ON_PUSH_TIMEOUT: Duration = Duration::from_secs(60);
@@ -41,10 +41,24 @@ pub type ApiError = (StatusCode, String);
 pub type ApiResult<T> = Result<T, ApiError>;
 
 pub fn router(state: AppState) -> Router {
-    let dashboard = crate::web::routes().layer(middleware::from_fn_with_state(
-        state.clone(),
-        crate::web::require_auth,
-    ));
+    // The browser sends dashboard credentials (HTTP Basic) by itself, so the forms are
+    // protected against cross-site posts. The API takes bearer tokens only: no such risk.
+    let mut csrf = CsrfLayer::new();
+    if let Some(url) = &state.config.public_url {
+        csrf = match csrf.clone().add_trusted_origin(url) {
+            Ok(layer) => layer,
+            Err(e) => {
+                tracing::warn!("TOCSIN_PUBLIC_URL is not a valid origin for CSRF checks: {e}");
+                csrf
+            }
+        };
+    }
+    let dashboard = crate::web::routes()
+        .layer(csrf)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::web::require_auth,
+        ));
     // Uploads may be gzip-compressed (Content-Encoding: gzip): SBOMs compress very well, which
     // keeps large ones under the request size limits of serverless platforms.
     let uploads = Router::new()
@@ -54,6 +68,7 @@ pub fn router(state: AppState) -> Router {
         .layer(RequestDecompressionLayer::new());
     Router::new()
         .merge(dashboard)
+        .merge(crate::web::static_routes())
         .merge(uploads)
         .route("/health", get(health))
         .route("/api/projects", post(create_project).get(list_projects))
@@ -157,8 +172,15 @@ async fn create_project(
     Json(body): Json<NewProject>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     require_admin(&st, &headers)?;
+    let token = new_project(&st.db, &body.name).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({ "name": body.name, "token": token })),
+    ))
+}
 
-    let name = body.name;
+/// Creates a project; returns its token, to show once (only its hash is stored).
+pub(crate) async fn new_project(db: &PgPool, name: &str) -> ApiResult<String> {
     let valid = !name.is_empty()
         && name.len() <= 100
         && name
@@ -176,18 +198,14 @@ async fn create_project(
         name,
         sha256_hex(&token),
     )
-    .execute(&st.db)
+    .execute(db)
     .await
     .map_err(internal)?
     .rows_affected();
     if inserted == 0 {
         return Err((StatusCode::CONFLICT, "project already exists".into()));
     }
-
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({ "name": name, "token": token })),
-    ))
+    Ok(token)
 }
 
 /// Admin only. Every project with its latest release and finding counts.
@@ -231,9 +249,20 @@ async fn ingest_sbom(
     Query(q): Query<IngestQuery>,
     Json(doc): Json<Value>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
+    let summary = ingest(&st, project.id, &project.name, q.version, doc).await?;
+    Ok((StatusCode::CREATED, Json(summary)))
+}
+
+/// Stores a release's SBOM, matches its new components and alerts; returns the push summary.
+pub(crate) async fn ingest(
+    st: &AppState,
+    project_id: i64,
+    project_name: &str,
+    version: Option<String>,
+    doc: Value,
+) -> ApiResult<Value> {
     let parsed = sbom::parse(&doc).map_err(bad_request)?;
-    let version = q
-        .version
+    let version = version
         .or(parsed.version)
         .filter(|v| !v.trim().is_empty())
         .ok_or_else(|| {
@@ -252,7 +281,7 @@ async fn ingest_sbom(
         "INSERT INTO sboms (project_id, version, document) VALUES ($1, $2, $3)
          ON CONFLICT (project_id, version) DO UPDATE SET document = EXCLUDED.document
          RETURNING id",
-        project.id,
+        project_id,
         version,
         doc,
     )
@@ -279,10 +308,10 @@ async fn ingest_sbom(
     let matching = if !st.config.match_on_push {
         "disabled"
     } else {
-        let stale = vulns::stale_purls(&st.db, project.id, st.config.refresh_every)
+        let stale = vulns::stale_purls(&st.db, project_id, st.config.refresh_every)
             .await
             .map_err(internal)?;
-        let osv = jobs::osv(&st);
+        let osv = jobs::osv(st);
         match tokio::time::timeout(
             MATCH_ON_PUSH_TIMEOUT,
             vulns::match_purls(&st.db, &osv, &stale),
@@ -291,42 +320,37 @@ async fn ingest_sbom(
         {
             Ok(Ok(_)) => "done",
             Ok(Err(e)) => {
-                tracing::warn!("matching deferred for {}: {e:#}", project.name);
+                tracing::warn!("matching deferred for {project_name}: {e:#}");
                 "deferred"
             }
             Err(_) => {
-                tracing::warn!("matching deferred for {}: timed out", project.name);
+                tracing::warn!("matching deferred for {project_name}: timed out");
                 "deferred"
             }
         }
     };
-    jobs::snapshot_metrics(&st.db, Some(project.id))
+    jobs::snapshot_metrics(&st.db, Some(project_id))
         .await
         .map_err(internal)?;
-    let alerted = jobs::alert(&st, Some(project.id))
-        .await
-        .unwrap_or_else(|e| {
-            tracing::warn!("alerting failed for {}: {e:#}", project.name);
-            0
-        });
+    let alerted = jobs::alert(st, Some(project_id)).await.unwrap_or_else(|e| {
+        tracing::warn!("alerting failed for {project_name}: {e:#}");
+        0
+    });
     let counts = sqlx::query!(
         r#"SELECT count(*) FILTER (WHERE NOT suppressed) AS "findings!",
                   count(*) FILTER (WHERE NOT suppressed AND kev) AS "kev!"
            FROM findings WHERE project_id = $1"#,
-        project.id
+        project_id
     )
     .fetch_one(&st.db)
     .await
     .map_err(internal)?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({
-            "project": project.name, "version": version, "components": count,
-            "matching": matching, "findings": counts.findings, "kev": counts.kev,
-            "alerted": alerted,
-        })),
-    ))
+    Ok(json!({
+        "project": project_name, "version": version, "components": count,
+        "matching": matching, "findings": counts.findings, "kev": counts.kev,
+        "alerted": alerted,
+    }))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -412,19 +436,7 @@ async fn put_analysis(
         body.detail.as_deref(),
     )
     .map_err(bad_request)?;
-    // An advisory ID (GHSA-…) is recorded against the flaw it describes
-    let key = sqlx::query_scalar!(
-        "SELECT canonical_id FROM vulnerabilities WHERE id = $1",
-        vuln
-    )
-    .fetch_optional(&st.db)
-    .await
-    .map_err(internal)?
-    .unwrap_or(vuln);
-    vex::upsert(&st.db, project_id, &key, &analysis)
-        .await
-        .map_err(internal)?;
-    jobs::snapshot_metrics(&st.db, Some(project_id))
+    let key = vex::record(&st.db, project_id, &vuln, Some(&analysis))
         .await
         .map_err(internal)?;
     Ok(Json(json!({
@@ -439,16 +451,7 @@ async fn delete_analysis(
     Path((name, vuln)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     let project_id = named_project(&st, &headers, &name).await?;
-    sqlx::query!(
-        "DELETE FROM analyses WHERE project_id = $1 AND vuln_key IN (
-             $2, (SELECT canonical_id FROM vulnerabilities WHERE id = $2))",
-        project_id,
-        vuln
-    )
-    .execute(&st.db)
-    .await
-    .map_err(internal)?;
-    jobs::snapshot_metrics(&st.db, Some(project_id))
+    vex::record(&st.db, project_id, &vuln, None)
         .await
         .map_err(internal)?;
     Ok(StatusCode::NO_CONTENT)
@@ -474,13 +477,22 @@ async fn import_vex(
     Json(doc): Json<Value>,
 ) -> ApiResult<Json<vex::ImportStats>> {
     let project_id = named_project(&st, &headers, &name).await?;
-    let stats = vex::import(&st.db, project_id, &doc)
+    Ok(Json(import_vex_doc(&st.db, project_id, &doc).await?))
+}
+
+/// Imports the analyses of a VEX document, then records today's metrics.
+pub(crate) async fn import_vex_doc(
+    db: &PgPool,
+    project_id: i64,
+    doc: &Value,
+) -> ApiResult<vex::ImportStats> {
+    let stats = vex::import(db, project_id, doc)
         .await
         .map_err(|e| bad_request(format!("{e:#}")))?;
-    jobs::snapshot_metrics(&st.db, Some(project_id))
+    jobs::snapshot_metrics(db, Some(project_id))
         .await
         .map_err(internal)?;
-    Ok(Json(stats))
+    Ok(stats)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -513,23 +525,32 @@ async fn create_policy(
     Json(body): Json<NewPolicy>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     require_admin(&st, &headers)?;
-    if body.name.trim().is_empty() {
+    let policy = new_policy(&st.db, &body.name, &body.kind, &body.value).await?;
+    Ok((StatusCode::CREATED, Json(policy)))
+}
+
+/// Validates and stores a policy; returns it as the API shows it.
+pub(crate) async fn new_policy(
+    db: &PgPool,
+    name: &str,
+    kind: &str,
+    value: &str,
+) -> ApiResult<Value> {
+    let name = name.trim();
+    if name.is_empty() {
         return Err(bad_request("policy name is required"));
     }
-    let value = policies::validate(&body.kind, &body.value).map_err(bad_request)?;
+    let value = policies::validate(kind, value).map_err(bad_request)?;
     let id = sqlx::query_scalar!(
         "INSERT INTO policies (name, kind, value) VALUES ($1, $2, $3) RETURNING id",
-        body.name.trim(),
-        body.kind,
+        name,
+        kind,
         value,
     )
-    .fetch_one(&st.db)
+    .fetch_one(db)
     .await
     .map_err(internal)?;
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({ "id": id, "name": body.name.trim(), "kind": body.kind, "value": value })),
-    ))
+    Ok(json!({ "id": id, "name": name, "kind": kind, "value": value }))
 }
 
 async fn delete_policy(
@@ -538,15 +559,20 @@ async fn delete_policy(
     Path(id): Path<i64>,
 ) -> ApiResult<StatusCode> {
     require_admin(&st, &headers)?;
+    remove_policy(&st.db, id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(crate) async fn remove_policy(db: &PgPool, id: i64) -> ApiResult<()> {
     let deleted = sqlx::query!("DELETE FROM policies WHERE id = $1", id)
-        .execute(&st.db)
+        .execute(db)
         .await
         .map_err(internal)?
         .rows_affected();
     if deleted == 0 {
         return Err((StatusCode::NOT_FOUND, "policy not found".into()));
     }
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 async fn project_violations(
@@ -572,19 +598,21 @@ async fn run_job(
     Path(job): Path<String>,
 ) -> ApiResult<Json<Value>> {
     require_admin(&st, &headers)?;
-    if !jobs::JOBS.contains(&job.as_str()) {
+    Ok(Json(run_job_now(&st, &job).await?))
+}
+
+/// Runs a job now; an unknown job is a 404, a failed one a 502 with its error.
+pub(crate) async fn run_job_now(st: &AppState, job: &str) -> ApiResult<Value> {
+    if !jobs::JOBS.contains(&job) {
         return Err((
             StatusCode::NOT_FOUND,
             format!("unknown job, expected one of {:?}", jobs::JOBS),
         ));
     }
-    match jobs::run(&st, &job).await {
-        Ok(result) => Ok(Json(result)),
-        Err(e) => {
-            tracing::warn!("job {job} failed: {e:#}");
-            Err((StatusCode::BAD_GATEWAY, format!("job {job} failed: {e:#}")))
-        }
-    }
+    jobs::run(st, job).await.map_err(|e| {
+        tracing::warn!("job {job} failed: {e:#}");
+        (StatusCode::BAD_GATEWAY, format!("job {job} failed: {e:#}"))
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -619,7 +647,7 @@ fn unauthorized() -> ApiError {
     )
 }
 
-fn bad_request(msg: impl Into<String>) -> ApiError {
+pub(crate) fn bad_request(msg: impl Into<String>) -> ApiError {
     (StatusCode::BAD_REQUEST, msg.into())
 }
 

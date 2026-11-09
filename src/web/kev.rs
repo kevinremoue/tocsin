@@ -1,9 +1,12 @@
 use super::{
-    Nav, PAGE_SIZE, analysis_badge, kev_status, like_pattern, not_found, page, pager, purl_list,
-    safe_links, search_term, url,
+    Audit, Nav, PAGE_SIZE, Viewer, audit_cell, kev_status, like_pattern, not_found, page, pager,
+    purl_list, safe_links, search_term, url,
 };
 use crate::api::{ApiResult, AppState, internal};
-use axum::extract::{Path, Query, State};
+use axum::{
+    Extension,
+    extract::{Path, Query, State},
+};
 use maud::{Markup, html};
 use serde::Deserialize;
 
@@ -18,7 +21,11 @@ pub struct KevQuery {
     page: Option<i64>,
 }
 
-pub async fn list(State(st): State<AppState>, Query(query): Query<KevQuery>) -> ApiResult<Markup> {
+pub async fn list(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    Query(query): Query<KevQuery>,
+) -> ApiResult<Markup> {
     let q = search_term(&query.q);
     let pattern = like_pattern(q);
     let ransomware = query.ransomware.is_some();
@@ -75,6 +82,7 @@ pub async fn list(State(st): State<AppState>, Query(query): Query<KevQuery>) -> 
     };
 
     Ok(page(
+        &viewer,
         "KEV catalog",
         Nav::Kev,
         html! {
@@ -120,7 +128,11 @@ fn note_links(notes: &str) -> Vec<&str> {
     safe_links(notes.split(|c: char| c.is_whitespace() || c == ';'))
 }
 
-pub async fn entry(State(st): State<AppState>, Path(cve): Path<String>) -> ApiResult<Markup> {
+pub async fn entry(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    Path(cve): Path<String>,
+) -> ApiResult<Markup> {
     let e = sqlx::query!(
         r#"SELECT cve_id, vendor_project, product, name, known_ransomware,
                   to_char(date_added, 'YYYY-MM-DD') AS "date_added!",
@@ -141,7 +153,8 @@ pub async fn entry(State(st): State<AppState>, Path(cve): Path<String>) -> ApiRe
     .ok_or_else(|| not_found("CVE in the KEV catalog"))?;
 
     let affected = sqlx::query!(
-        r#"SELECT p.name, f.vuln_key AS "vuln_key!", f.purls AS "purls!", f.state
+        r#"SELECT p.name, f.vuln_key AS "vuln_key!", f.purls AS "purls!", f.state,
+                  f.justification, f.detail
            FROM findings f JOIN projects p ON p.id = f.project_id
            WHERE f.vuln_ids && ARRAY(SELECT id FROM vulnerabilities WHERE $1 = ANY (cve_ids))
            ORDER BY f.suppressed, p.name"#,
@@ -163,6 +176,7 @@ pub async fn entry(State(st): State<AppState>, Path(cve): Path<String>) -> ApiRe
         .collect();
 
     Ok(page(
+        &viewer,
         &e.cve_id,
         Nav::Kev,
         html! {
@@ -205,7 +219,13 @@ pub async fn entry(State(st): State<AppState>, Path(cve): Path<String>) -> ApiRe
                         td { a href={ "/projects/" (a.name) } { (a.name) } }
                         td.nowrap { a href={ "/vulns/" (a.vuln_key) } { code { (a.vuln_key) } } }
                         td { (purl_list(&a.purls)) }
-                        td { (analysis_badge(a.state.as_deref())) }
+                        td { (audit_cell(&viewer, &Audit {
+                            project: &a.name,
+                            vuln_key: &a.vuln_key,
+                            state: a.state.as_deref(),
+                            justification: a.justification.as_deref(),
+                            detail: a.detail.as_deref(),
+                        }, &format!("/kev/{}", e.cve_id))) }
                     } } }
                 } }
             }

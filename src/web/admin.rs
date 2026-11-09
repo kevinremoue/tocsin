@@ -1,9 +1,29 @@
-use super::{Nav, kev_badge, page, severity};
+use super::{Nav, Viewer, flash, kev_badge, page, severity};
 use crate::api::{ApiResult, AppState, internal};
-use axum::extract::State;
+use axum::{
+    Extension,
+    extract::{Query, State},
+};
 use maud::{Markup, html};
 
-pub async fn policies(State(st): State<AppState>) -> ApiResult<Markup> {
+#[derive(serde::Deserialize)]
+pub struct DoneQuery {
+    done: Option<String>,
+}
+
+/// What each policy kind's value means, for the form.
+const KIND_HINTS: [(&str, &str, &str); 4] = [
+    ("license", "License", "SPDX license ID, e.g. GPL-3.0-only"),
+    ("severity", "Severity", "critical, high, medium or low"),
+    ("kev", "KEV", "no value"),
+    ("epss", "EPSS", "probability (0.5) or percentage (50%)"),
+];
+
+pub async fn policies(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    Query(dq): Query<DoneQuery>,
+) -> ApiResult<Markup> {
     let policies = sqlx::query!("SELECT id, name, kind, value FROM policies ORDER BY id")
         .fetch_all(&st.db)
         .await
@@ -13,19 +33,27 @@ pub async fn policies(State(st): State<AppState>) -> ApiResult<Markup> {
         .map_err(internal)?;
 
     Ok(page(
+        &viewer,
         "Policies",
         Nav::Policies,
         html! {
             h1 { "Policies" }
             p.status.muted {
-                "Rules checked against each project's latest release. Manage them with "
-                code { "POST /api/policies" } " and " code { "DELETE /api/policies/{id}" } "."
+                "Rules checked against each project's latest release."
+                @if !viewer.can_write {
+                    " Manage them with " code { "POST /api/policies" } " and "
+                    code { "DELETE /api/policies/{id}" } "."
+                }
             }
+            (flash(dq.done.as_deref()))
             @if policies.is_empty() {
                 p.muted { "No policy defined." }
             } @else {
                 div.scroll { table {
-                    thead { tr { th { "Policy" } th { "Rule" } th.num { "Violations" } } }
+                    thead { tr {
+                        th { "Policy" } th { "Rule" } th.num { "Violations" }
+                        @if viewer.can_write { th {} }
+                    } }
                     tbody { @for p in &policies { tr {
                         td { (p.name) }
                         td { @match p.kind.as_str() {
@@ -35,8 +63,31 @@ pub async fn policies(State(st): State<AppState>) -> ApiResult<Markup> {
                             _ => { "Vulnerability in the KEV catalog" }
                         } }
                         td.num { (violations.iter().filter(|v| v.policy_id == p.id).count()) }
+                        @if viewer.can_write {
+                            td.num {
+                                form.inline method="post" action={ "/policies/" (p.id) "/delete" }
+                                    hx-post={ "/policies/" (p.id) "/delete" } hx-target="closest tr"
+                                    hx-swap="outerHTML" hx-confirm={ "Delete the policy “" (p.name) "”?" } {
+                                    button.danger type="submit" { "Delete" }
+                                }
+                            }
+                        }
                     } } }
                 } }
+            }
+            @if viewer.can_write {
+                div.panel {
+                    h3 { "New policy" }
+                    form.stack method="post" action="/policies" {
+                        input type="text" name="name" required placeholder="Name, e.g. No AGPL" aria-label="Policy name";
+                        select name="kind" aria-label="Kind" {
+                            @for (kind, label, _) in KIND_HINTS { option value=(kind) { (label) } }
+                        }
+                        input type="text" name="value" placeholder="Value" aria-label="Value";
+                        button.primary type="submit" { "Create" }
+                    }
+                    ul.muted { @for (_, label, hint) in KIND_HINTS { li { strong { (label) } ": " (hint) } } }
+                }
             }
             @if !violations.is_empty() {
                 h2 { "Violations " span.muted { "(" (violations.len()) ")" } }
@@ -55,7 +106,10 @@ pub async fn policies(State(st): State<AppState>) -> ApiResult<Markup> {
     ))
 }
 
-pub async fn alerts(State(st): State<AppState>) -> ApiResult<Markup> {
+pub async fn alerts(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+) -> ApiResult<Markup> {
     let alerts = sqlx::query!(
         r#"SELECT to_char(a.sent_at, 'YYYY-MM-DD HH24:MI') AS "sent_at!", p.name, a.vuln_key,
                   a.rule, a.severity, a.kev
@@ -68,6 +122,7 @@ pub async fn alerts(State(st): State<AppState>) -> ApiResult<Markup> {
     let channel = st.config.google_chat_webhook.is_some();
 
     Ok(page(
+        &viewer,
         "Alerts",
         Nav::Alerts,
         html! {

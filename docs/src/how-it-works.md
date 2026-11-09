@@ -86,4 +86,4 @@ The views `latest_sboms` (each project's latest release) and `findings` (advisor
 
 ## Stack
 
-Tocsin is written in Rust with [axum](https://github.com/tokio-rs/axum) and [sqlx](https://github.com/launchbadge/sqlx) on Postgres. The dashboard is rendered on the server with [maud](https://maud.lambda.xyz/), which escapes every value, and uses no JavaScript. HTTPS uses rustls.
+Tocsin is written in Rust with [axum](https://github.com/tokio-rs/axum) and [sqlx](https://github.com/launchbadge/sqlx) on Postgres. The dashboard is rendered on the server with [maud](https://maud.lambda.xyz/), which escapes every value. Its forms work without JavaScript; [htmx](https://htmx.org) (about 14 KB, embedded in the binary) updates parts of a page in place. There is no frontend build and no Node toolchain. HTTPS uses rustls.

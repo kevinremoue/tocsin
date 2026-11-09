@@ -40,7 +40,7 @@ Tasks that compile the code start Postgres and apply migrations first: `sqlx::qu
 - **Tests.** Add tests for new behavior. Database tests use `#[sqlx::test]`, which gives each test its own migrated throwaway database.
 - **Migrations.** Every schema change goes in a new file in `migrations/`. Never edit a migration that has already been released.
 - **SQL metadata.** If you add or change a query, run `mise run db:prepare` and commit the `.sqlx/` changes. CI fails otherwise.
-- **Dashboard.** Server-side rendered with [maud](https://maud.lambda.xyz/), no JavaScript. Values are escaped automatically; never use `PreEscaped` on user-supplied data.
+- **Dashboard.** Server-side rendered with [maud](https://maud.lambda.xyz/), with [htmx](https://htmx.org) for in-place updates; no SPA and no frontend build. Values are escaped automatically; never use `PreEscaped` on user-supplied data. Forms must work without JavaScript (htmx only enhances them), and the Content-Security-Policy forbids inline scripts and styles: put styles in `src/web/static/tocsin.css`, never in `style=` attributes. Changes go through `src/web/actions.rs` and require the admin token.
 - **Commits.** Keep commits focused, with a message that explains *why*.
 - **Documentation.** The docs site lives in `docs/src/` ([mdBook](https://rust-lang.github.io/mdBook/)). Update the relevant page when you change behavior, configuration or the API.
 - **Changelog.** Add a line under `Unreleased` in [CHANGELOG.md](CHANGELOG.md) for user-visible changes.
