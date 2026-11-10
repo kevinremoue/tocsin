@@ -241,7 +241,8 @@ struct IngestQuery {
     version: Option<String>,
 }
 
-/// Called by CI on each production release. Re-pushing a version replaces its SBOM. The new
+/// Called by CI on each production release. Re-pushing a version replaces its SBOM and makes it
+/// the latest release again (the last pushed is the one in production, ADR 0002). The new
 /// components are matched against the vulnerability sources right away when possible.
 async fn ingest_sbom(
     State(st): State<AppState>,
@@ -276,10 +277,17 @@ pub(crate) async fn ingest(
         .map(|(purl, l)| (purl, l.into_iter().collect::<Vec<_>>().join("\n")))
         .unzip();
 
+    // Preserve complete evidence before replacing the production declaration, even for a re-upload.
+    sqlx::query("SELECT capture_evaluations($1)")
+        .bind(project_id)
+        .execute(&st.db)
+        .await
+        .map_err(internal)?;
     let mut tx = st.db.begin().await.map_err(internal)?;
     let sbom_id = sqlx::query_scalar!(
         "INSERT INTO sboms (project_id, version, document) VALUES ($1, $2, $3)
-         ON CONFLICT (project_id, version) DO UPDATE SET document = EXCLUDED.document
+         ON CONFLICT (project_id, version) DO UPDATE SET document = EXCLUDED.document,
+             created_at = now()
          RETURNING id",
         project_id,
         version,
@@ -346,7 +354,11 @@ pub(crate) async fn ingest(
     .await
     .map_err(internal)?;
 
+    let coverage = crate::coverage::project(&st.db, project_id)
+        .await
+        .map_err(internal)?;
     Ok(json!({
+        "coverage": coverage,
         "project": project_name, "version": version, "components": count,
         "matching": matching, "findings": counts.findings, "kev": counts.kev,
         "alerted": alerted,
@@ -406,13 +418,19 @@ async fn project_findings(
                 "summary": r.summary,
                 "components": r.purls,
                 "analysis": r.state.map(|state| json!({
+                    "pending_revalidation": matches!(state.as_str(), "not_affected" | "false_positive" | "resolved") && !r.suppressed,
                     "state": state, "justification": r.justification, "detail": r.detail,
                 })),
                 "suppressed": r.suppressed,
             })
         })
         .collect();
-    Ok(Json(json!({ "project": name, "findings": findings })))
+    let coverage = crate::coverage::project(&st.db, project_id)
+        .await
+        .map_err(internal)?;
+    Ok(Json(
+        json!({ "project": name, "findings": findings, "coverage": coverage }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -422,13 +440,14 @@ struct AnalysisBody {
     detail: Option<String>,
 }
 
-/// Records an audit decision for a flaw (CVE ID, or advisory ID when it has no CVE).
+/// Records an analysis of a vulnerability (CVE ID, or advisory ID when it has no CVE).
 async fn put_analysis(
     State(st): State<AppState>,
     headers: HeaderMap,
     Path((name, vuln)): Path<(String, String)>,
     Json(body): Json<AnalysisBody>,
 ) -> ApiResult<Json<Value>> {
+    require_admin(&st, &headers)?;
     let project_id = named_project(&st, &headers, &name).await?;
     let analysis = vex::Analysis::validate(
         &body.state,
@@ -450,6 +469,7 @@ async fn delete_analysis(
     headers: HeaderMap,
     Path((name, vuln)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
+    require_admin(&st, &headers)?;
     let project_id = named_project(&st, &headers, &name).await?;
     vex::record(&st.db, project_id, &vuln, None)
         .await
@@ -476,6 +496,7 @@ async fn import_vex(
     Path(name): Path<String>,
     Json(doc): Json<Value>,
 ) -> ApiResult<Json<vex::ImportStats>> {
+    require_admin(&st, &headers)?;
     let project_id = named_project(&st, &headers, &name).await?;
     Ok(Json(import_vex_doc(&st.db, project_id, &doc).await?))
 }

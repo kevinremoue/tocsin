@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE vulnerabilities v SET canonical_id = r.name\n         FROM UNNEST($1::text[], $2::text[]) AS r (id, name) WHERE v.id = r.id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "88ed372087889f20e31569334c60f05a5e19b8db294a87b52a61d69c2c539691"
+}

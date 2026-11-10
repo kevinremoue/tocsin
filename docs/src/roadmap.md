@@ -7,7 +7,7 @@ Tocsin works end to end but has not been tagged as a release yet. Version 0.1.0 
 - [x] SBOM ingestion API with per-project tokens, gzip uploads
 - [x] Vulnerability matching through OSV.dev, all vulnerabilities with severity and CVSS v3
 - [x] CISA KEV catalog sync; KEV findings flagged everywhere
-- [x] Google Chat alerts: KEV by default, optional severity threshold, once per project and vulnerability
+- [x] Google Chat alerts: KEV by default, optional severity threshold, once per rule and actionable episode
 - [x] Auditing with CycloneDX VEX states, VEX export and import
 - [x] Policies: license, severity, KEV
 - [x] Metrics with daily history

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO sboms (project_id, version, document) VALUES ($1, $2, $3)\n         ON CONFLICT (project_id, version) DO UPDATE SET document = EXCLUDED.document\n         RETURNING id",
+  "query": "INSERT INTO sboms (project_id, version, document) VALUES ($1, $2, $3)\n         ON CONFLICT (project_id, version) DO UPDATE SET document = EXCLUDED.document,\n             created_at = now()\n         RETURNING id",
   "describe": {
     "columns": [
       {
@@ -26,5 +26,5 @@
       false
     ]
   },
-  "hash": "5e97709b4d53828ce800cc35f85f9a3e4955e2909e9cb4d3b9f599dcb522a7d2"
+  "hash": "c170a565775e567e6db2aa19d2a31dde0ad4425a30050b704f4ddcdee182f56f"
 }

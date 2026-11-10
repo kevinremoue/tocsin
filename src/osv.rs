@@ -113,7 +113,13 @@ impl VulnSource for Osv {
                 chunk.iter().map(|p| (p.clone(), None)).collect();
             // A purl with many advisories is paginated: query again with its page token
             while !queries.is_empty() {
+                let requested: Vec<String> = queries.iter().map(|(p, _)| p.clone()).collect();
                 let results = self.query_batch(&mut queries).await?;
+                for p in requested {
+                    if !queries.iter().any(|(q, _)| *q == p) {
+                        out.remove(&p);
+                    }
+                }
                 let mut next = Vec::new();
                 for ((purl, _), result) in queries.iter().zip(results) {
                     out.get_mut(purl).expect("queried purls are keys").extend(

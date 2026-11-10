@@ -1,8 +1,9 @@
 //! Vulnerability matching: package URLs → advisories, stored in `component_vulns`.
 //!
 //! Advisories use the [OSV schema](https://ossf.github.io/osv-schema/) as the common format,
-//! whatever the source. Several advisories often describe the same flaw (GHSA-…, PYSEC-…,
-//! CVE-…): they share a `canonical_id` (their first CVE ID), which groups them into one finding.
+//! whatever the source. Several advisories often describe the same vulnerability (GHSA-…, PYSEC-…,
+//! CVE-…): they share a `canonical_id`, which groups them into one vulnerability (see
+//! `identity`).
 use futures_util::{StreamExt, TryStreamExt, stream};
 use serde_json::Value;
 use sqlx::PgPool;
@@ -189,7 +190,12 @@ impl Advisory {
             .unwrap_or(Severity::Unknown);
 
         Some(Self {
-            canonical_id: cve_ids.first().cloned().unwrap_or_else(|| id.clone()),
+            // A first name; `identity::regroup` settles it among the other advisories
+            canonical_id: cve_ids
+                .iter()
+                .min_by_key(|c| crate::identity::cve_order(c))
+                .cloned()
+                .unwrap_or_else(|| id.clone()),
             summary: doc["summary"]
                 .as_str()
                 .filter(|s| !s.is_empty())
@@ -224,11 +230,19 @@ pub(crate) trait VulnSource {
 
 /// Only purls with a version can be matched against advisories.
 pub fn is_matchable(purl: &str) -> bool {
-    purl.starts_with("pkg:")
-        && purl
-            .split(['?', '#'])
-            .next()
-            .is_some_and(|p| p.contains('@'))
+    let Some(package) = purl
+        .strip_prefix("pkg:")
+        .and_then(|p| p.split(['?', '#']).next())
+    else {
+        return false;
+    };
+    let Some((kind, name_version)) = package.split_once('/') else {
+        return false;
+    };
+    let Some((name, version)) = name_version.rsplit_once('@') else {
+        return false;
+    };
+    !kind.is_empty() && !name.is_empty() && !version.is_empty() && !version.contains('/')
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -256,7 +270,14 @@ pub(crate) async fn match_purls(
     if purls.is_empty() {
         return Ok(MatchStats::default());
     }
+    sqlx::query("INSERT INTO matching_attempts (purl) SELECT unnest($1::text[]) ON CONFLICT (purl) DO UPDATE SET attempted_at = now()")
+        .bind(&purls).execute(db).await?;
     let affected = source.affected(&purls).await?;
+    // Omitted identifiers were rejected or incompletely evaluated, not proven absent.
+    let purls: Vec<String> = purls
+        .into_iter()
+        .filter(|p| affected.contains_key(p))
+        .collect();
 
     // Fetch only advisories that are new or were modified since they were stored
     let mut latest: HashMap<&str, &str> = HashMap::new();
@@ -279,14 +300,25 @@ pub(crate) async fn match_purls(
         .map(|(id, _)| id.to_string())
         .collect();
 
+    let expected: BTreeSet<_> = to_fetch.iter().cloned().collect();
     // Owned IDs: a stream of futures borrowing &str trips rustc's Send inference in axum handlers
     let docs: Vec<Value> = stream::iter(to_fetch)
         .map(|id| async move { source.advisory(&id).await })
         .buffer_unordered(FETCH_CONCURRENCY)
         .try_collect()
         .await?;
+    let received: BTreeSet<_> = docs
+        .iter()
+        .filter_map(|doc| Advisory::from_osv(doc).map(|a| a.id))
+        .collect();
+    if received != expected || docs.iter().any(|doc| Advisory::from_osv(doc).is_none()) {
+        anyhow::bail!("incomplete matching: invalid or mismatched advisory");
+    }
     let fetched = docs.len();
     store_advisories(db, &docs, &latest).await?;
+    if fetched > 0 {
+        crate::identity::regroup(db).await?;
+    }
 
     let mut link_purls = Vec::new();
     let mut link_ids = Vec::new();
@@ -376,13 +408,13 @@ async fn store_advisories(
     sqlx::query!(
         "INSERT INTO vulnerabilities (id, cve_ids, canonical_id, summary, severity, cvss_score,
                                       cvss_vector, published_at, modified, withdrawn, data)
-         SELECT id, string_to_array(NULLIF(cves, ''), ','), canonical, summary, severity, score,
+         SELECT id, COALESCE(string_to_array(NULLIF(cves, ''), ','), '{}'), canonical, summary, severity, score,
                 vector, published::timestamptz, modified, withdrawn, data
          FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::smallint[], $6::real[],
                      $7::text[], $8::text[], $9::text[], $10::bool[], $11::jsonb[])
               AS t (id, cves, canonical, summary, severity, score, vector, published, modified, withdrawn, data)
          ON CONFLICT (id) DO UPDATE SET
-             cve_ids = EXCLUDED.cve_ids, canonical_id = EXCLUDED.canonical_id,
+             cve_ids = EXCLUDED.cve_ids,
              summary = EXCLUDED.summary, severity = EXCLUDED.severity,
              cvss_score = EXCLUDED.cvss_score, cvss_vector = EXCLUDED.cvss_vector,
              published_at = EXCLUDED.published_at, modified = EXCLUDED.modified,
@@ -448,6 +480,8 @@ pub(crate) async fn refresh_all(
     )
     .execute(db)
     .await?;
+    // Also settles names stored before regrouping existed
+    crate::identity::regroup(db).await?;
     Ok(total)
 }
 

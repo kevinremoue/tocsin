@@ -85,6 +85,19 @@ pub async fn alert(st: &AppState, project_id: Option<i64>) -> anyhow::Result<usi
 
 /// Records today's finding counts, for one project or all.
 pub async fn snapshot_metrics(db: &PgPool, project_id: Option<i64>) -> sqlx::Result<()> {
+    let mut tx = db.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(alerts::LOCK_KEY)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT reconcile_findings()")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT capture_evaluations($1)")
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
     sqlx::query!(
         "INSERT INTO project_metrics (project_id, day, critical, high, medium, low, unknown,
                                       kev, suppressed, components)

@@ -1,6 +1,6 @@
 use super::{
-    Audit, Nav, PAGE_SIZE, Viewer, audit_cell, epss, flash, kev_badge, like_pattern, not_found,
-    page, pager, purl_list, safe_links, search_term, severity, url,
+    AnalysisCell, Nav, PAGE_SIZE, Viewer, analysis_cell, epss, flash, kev_badge, like_pattern,
+    not_found, page, pager, purl_list, safe_links, search_term, severity, url,
 };
 use crate::api::{ApiResult, AppState, internal};
 use axum::{
@@ -13,12 +13,12 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct ListQuery {
     q: Option<String>,
-    /// Present: only flaws in the KEV catalog
+    /// Present: only vulnerabilities in the KEV catalog
     kev: Option<String>,
     page: Option<i64>,
 }
 
-/// Every flaw affecting at least one project (unsuppressed), across the portfolio.
+/// Every vulnerability affecting at least one project (unsuppressed), across the portfolio.
 pub async fn list(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
@@ -109,22 +109,18 @@ pub struct DetailQuery {
     done: Option<String>,
 }
 
-/// A flaw: its advisories (one per source), references, and the projects it affects.
-/// `id` is the canonical ID (usually a CVE) or any advisory ID.
+/// A vulnerability: its advisories (one per source), references, and the projects it affects.
+/// `id` is the current name (usually a CVE), any advisory ID or any of its CVEs.
 pub async fn detail(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
     Path(id): Path<String>,
     Query(dq): Query<DetailQuery>,
 ) -> ApiResult<Markup> {
-    let key = sqlx::query_scalar!(
-        "SELECT canonical_id FROM vulnerabilities WHERE id = $1 OR canonical_id = $1 LIMIT 1",
-        id
-    )
-    .fetch_optional(&st.db)
-    .await
-    .map_err(internal)?
-    .ok_or_else(|| not_found("vulnerability"))?;
+    let key = crate::identity::resolve(&st.db, &id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| not_found("vulnerability"))?;
 
     let advisories = sqlx::query!(
         r#"SELECT id, summary, severity, cvss_score, cvss_vector, withdrawn, cve_ids,
@@ -161,16 +157,17 @@ pub async fn detail(
     .await
     .map_err(internal)?;
 
-    let affected = sqlx::query!(
+    let matched = sqlx::query!(
         r#"SELECT p.name, f.purls AS "purls!", f.state, f.justification, f.detail,
                   f.suppressed AS "suppressed!"
            FROM findings f JOIN projects p ON p.id = f.project_id
-           WHERE f.vuln_key = $1 ORDER BY f.suppressed, p.name"#,
+           WHERE f.vuln_key = $1 ORDER BY p.name"#,
         key
     )
     .fetch_all(&st.db)
     .await
     .map_err(internal)?;
+    let (suppressed, affected): (Vec<_>, Vec<_>) = matched.into_iter().partition(|m| m.suppressed);
 
     let summary = advisories.iter().find_map(|a| a.summary.clone());
     let details = advisories.iter().find_map(|a| a.details.clone());
@@ -210,24 +207,34 @@ pub async fn detail(
                 }
             }
 
-            h2 { "Affected projects " span.muted { "(" (affected.len()) ")" } }
-            @if affected.is_empty() {
-                p.muted { "No project's latest release is affected." }
-            } @else {
-                div.scroll { table {
-                    thead { tr { th { "Project" } th { "Components" } th { "Analysis" } } }
-                    tbody { @for a in &affected { tr {
-                        td { a href={ "/projects/" (a.name) } { (a.name) } }
-                        td { (purl_list(&a.purls)) }
-                        td { (audit_cell(&viewer, &Audit {
-                            project: &a.name,
-                            vuln_key: &key,
-                            state: a.state.as_deref(),
-                            justification: a.justification.as_deref(),
-                            detail: a.detail.as_deref(),
-                        }, &format!("/vulns/{key}"))) }
-                    } } }
-                } }
+            @for (title, rows) in [("Affected projects", &affected), ("Suppressed", &suppressed)] {
+                @if title == "Affected projects" || !rows.is_empty() {
+                    h2 { (title) " " span.muted { "(" (rows.len()) ")" } }
+                }
+                @if title == "Suppressed" && !rows.is_empty() {
+                    p.muted { "Matched, but their analysis says they are not at risk." }
+                }
+                @if rows.is_empty() {
+                    @if title == "Affected projects" {
+                        p.muted { "No project has an unsuppressed finding for this vulnerability." }
+                    }
+                } @else {
+                    div.scroll { table {
+                        thead { tr { th { "Project" } th { "Components" } th { "Analysis" } } }
+                        tbody { @for a in rows.iter() { tr {
+                            td { a href={ "/projects/" (a.name) } { (a.name) } }
+                            td { (purl_list(&a.purls)) }
+                            td { (analysis_cell(&viewer, &AnalysisCell {
+                                project: &a.name,
+                                vuln_key: &key,
+                                state: a.state.as_deref(),
+                                suppressed: a.suppressed,
+                                justification: a.justification.as_deref(),
+                                detail: a.detail.as_deref(),
+                            }, &format!("/vulns/{key}"))) }
+                        } } }
+                    } }
+                }
             }
 
             h2 { "Advisories" }

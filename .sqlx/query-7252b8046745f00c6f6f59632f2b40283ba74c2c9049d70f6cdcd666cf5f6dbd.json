@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT f.project_id AS \"project_id!\", p.name, f.vuln_key AS \"vuln_key!\",\n                  f.severity AS \"severity!\", f.kev AS \"kev!\", f.epss, f.summary,\n                  f.purls AS \"purls!\",\n                  r.rule AS \"rule!\"\n           FROM findings f\n           JOIN projects p ON p.id = f.project_id\n           CROSS JOIN LATERAL (VALUES\n               ('kev', $1 AND f.kev),\n               ('severity', $2::smallint IS NOT NULL AND f.severity >= $2),\n               ('epss', $4::real IS NOT NULL AND f.epss IS NOT NULL AND f.epss >= $4)\n           ) AS r (rule, applies)\n           WHERE r.applies AND NOT f.suppressed\n             AND ($3::bigint IS NULL OR f.project_id = $3)\n             AND NOT EXISTS (SELECT 1 FROM alerts a WHERE a.project_id = f.project_id\n                             AND a.vuln_key = f.vuln_key AND a.rule = r.rule)\n           ORDER BY p.name, f.kev DESC, f.epss DESC NULLS LAST, f.severity DESC, f.vuln_key",
+  "query": "SELECT f.project_id AS \"project_id!\", p.name, f.vuln_key AS \"vuln_key!\",\n                  f.severity AS \"severity!\", f.kev AS \"kev!\", f.epss, f.summary,\n                  f.purls AS \"purls!\",\n                  r.rule AS \"rule!\"\n           FROM findings f\n           JOIN projects p ON p.id = f.project_id\n           CROSS JOIN LATERAL (VALUES\n               ('kev', $1 AND f.kev),\n               ('severity', $2::smallint IS NOT NULL AND f.severity >= $2),\n               ('epss', $4::real IS NOT NULL AND f.epss IS NOT NULL AND f.epss >= $4)\n           ) AS r (rule, applies)\n           WHERE r.applies AND NOT f.suppressed\n             AND ($3::bigint IS NULL OR f.project_id = $3)\n             AND NOT EXISTS (SELECT 1 FROM alerts a WHERE a.project_id = f.project_id\n                             AND a.vuln_key = f.vuln_key AND a.rule = r.rule\n                              AND a.episode = (SELECT episode FROM finding_episodes e\n                                  WHERE e.project_id = f.project_id AND e.vuln_key = f.vuln_key))\n           ORDER BY p.name, f.kev DESC, f.epss DESC NULLS LAST, f.severity DESC, f.vuln_key",
   "describe": {
     "columns": [
       {
@@ -118,5 +118,5 @@
       null
     ]
   },
-  "hash": "f9536a6f28061952c4dcb84e0bbbe0ecfd89fd31a168def0aced12cadab16e14"
+  "hash": "7252b8046745f00c6f6f59632f2b40283ba74c2c9049d70f6cdcd666cf5f6dbd"
 }

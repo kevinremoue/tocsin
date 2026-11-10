@@ -32,7 +32,7 @@ A real codebase easily has dozens or hundreds of known vulnerabilities, most of 
 ## Design principles
 
 - **Production first.** Matching uses each project's latest release SBOM, which is what runs in production.
-- **Strong signal.** Alert on actively exploited CVEs by default, and send each (project, vulnerability) pair once.
+- **Strong signal.** Alert on actively exploited CVEs by default, and send each rule once per actionable episode.
 - **Small footprint.** A single binary and a Postgres database. No queue, no cache, no frontend build: the dashboard is rendered on the server.
 - **Serverless-ready.** No long-running work in the server: scheduled jobs run on demand, so instances can scale to zero.
 - **Standard formats.** CycloneDX SBOMs in, CycloneDX VEX in and out, components identified by [package URL](https://github.com/package-url/purl-spec), advisories in the [OSV schema](https://ossf.github.io/osv-schema/).

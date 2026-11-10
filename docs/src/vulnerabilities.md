@@ -2,9 +2,11 @@
 
 ## Findings
 
-A **finding** is a vulnerability affecting a component of a project's **latest release**. Tocsin finds them by querying [OSV.dev](https://osv.dev) with each component's package URL. OSV aggregates many databases in one format: GitHub Advisories, the PyPI, npm, Go, RustSec and Maven ecosystems, Debian, Ubuntu, Alpine, and more.
+A **finding** is a vulnerability matched in a component of a project's **latest release**. Tocsin finds them by querying [OSV.dev](https://osv.dev) with each component's package URL. OSV aggregates many databases in one format: GitHub Advisories, the PyPI, npm, Go, RustSec and Maven ecosystems, Debian, Ubuntu, Alpine, and more.
 
-The same flaw often has several advisories: for Log4Shell, `GHSA-jfh8-c2jp-5v3q` from GitHub and `CVE-2021-44228` from NVD. Tocsin groups advisories that share a CVE into **one finding, named by its CVE**. An advisory without a CVE (some `RUSTSEC-…` or `GHSA-…` entries) is its own finding, named by its ID.
+An **advisory** is one source's record: for Log4Shell, `GHSA-jfh8-c2jp-5v3q` from GitHub and `CVE-2021-44228` from NVD. Tocsin groups advisories that share a CVE into **one vulnerability, named by its CVE**, and so one finding per project. An advisory without a CVE (some `RUSTSEC-…` or `GHSA-…` entries) is its own vulnerability, named by its ID. When an advisory later gains a CVE, its vulnerability is renamed and keeps its analyses and alerts (see [How it works](how-it-works.md#vulnerability-matching)).
+
+A project is **affected** by a vulnerability when it has an unsuppressed finding for it; a project whose finding is suppressed is only **matched**. The vulnerability and KEV pages list both separately.
 
 Findings are matched at two moments:
 
@@ -45,7 +47,7 @@ Not every finding is relevant: the vulnerable code may be unreachable, or the is
 
 **From the dashboard**, signed in with the admin token: click the Analysis cell of a finding (on the project page, a vulnerability page or a KEV entry), choose the state, a justification and a detail, then **Save**.
 
-**From the API**, with the admin token or the project's token:
+**From the API**, with the admin token:
 
 ```sh
 curl -X PUT "$TOCSIN_URL/api/projects/my-service/analyses/CVE-2021-44228" \
@@ -53,7 +55,7 @@ curl -X PUT "$TOCSIN_URL/api/projects/my-service/analyses/CVE-2021-44228" \
   -d '{"state": "not_affected", "justification": "code_not_reachable", "detail": "JNDI lookups disabled"}'
 ```
 
-The token is the admin token or the project's own token. The vulnerability can be named by its CVE or by any of its advisory IDs.
+The token must be the admin token. The vulnerability can be named by its CVE or by any of its advisory IDs.
 
 States and justifications follow [CycloneDX VEX](https://cyclonedx.org/capabilities/vex/):
 
@@ -69,7 +71,7 @@ Justifications (optional, for `not_affected`): `code_not_present`, `code_not_rea
 
 **Suppressed** findings are hidden by default, are not counted in metrics, never alert, and do not violate policies. The dashboard can show them; the findings API returns them with `?suppressed=true`. Delete an analysis with `DELETE` on the same URL.
 
-Analyses are recorded per project and vulnerability, so they survive new releases: if the next release still contains the component, the decision still applies.
+Analysis rationale survives new releases, but suppression applies only while the exact matched versioned purl set and material applicability remain accepted. Changed evidence requires revalidation.
 
 ## VEX export and import
 
@@ -83,3 +85,11 @@ curl -X POST "$TOCSIN_URL/api/projects/blog/vex" -H "Authorization: Bearer $ADMI
 ```
 
 Vulnerabilities without an `analysis.state` are skipped and listed in `skipped`, with the reason.
+
+## Evidence-bound suppression
+
+Only administrators may record/delete analyses or import VEX; project tokens upload and read only. A suppression binds to the exact matched versioned purl set and material advisory applicability. Evidence changes or confirmed disappearance invalidate it, retaining the rationale pending revalidation. Existing analyses migrate pending revalidation. Cosmetic IDs, severity and EPSS changes alone do not invalidate acceptance.
+
+The findings API exposes `analysis.pending_revalidation`. A retained suppressing state does not by itself mean the finding is suppressed: use `suppressed`. VEX exports include the `tocsin:evidence` property; importing suppressions requires that property and the exact current `affects` references, otherwise the import is rejected. Re-export and review the current evidence rather than editing identifiers to force an old decision through.
+
+The dashboard shows **Pending revalidation** beside retained but ineffective suppressing states, plus matching coverage, license gaps, identifier timestamps, and the last complete historical evaluation during incomplete matching. Applicability arrays are normalized as sets and advisory `database_specific` presentation fields do not constitute material applicability.

@@ -1,0 +1,24 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO vulnerabilities (id, cve_ids, canonical_id, summary, severity, cvss_score,\n                                      cvss_vector, published_at, modified, withdrawn, data)\n         SELECT id, COALESCE(string_to_array(NULLIF(cves, ''), ','), '{}'), canonical, summary, severity, score,\n                vector, published::timestamptz, modified, withdrawn, data\n         FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::smallint[], $6::real[],\n                     $7::text[], $8::text[], $9::text[], $10::bool[], $11::jsonb[])\n              AS t (id, cves, canonical, summary, severity, score, vector, published, modified, withdrawn, data)\n         ON CONFLICT (id) DO UPDATE SET\n             cve_ids = EXCLUDED.cve_ids,\n             summary = EXCLUDED.summary, severity = EXCLUDED.severity,\n             cvss_score = EXCLUDED.cvss_score, cvss_vector = EXCLUDED.cvss_vector,\n             published_at = EXCLUDED.published_at, modified = EXCLUDED.modified,\n             withdrawn = EXCLUDED.withdrawn, data = EXCLUDED.data, fetched_at = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "Int2Array",
+        "Float4Array",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "BoolArray",
+        "JsonbArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "38e99b9cc18e5c575fa16c780b1ab897a23dc425fbf05d80316c821caf52b9f5"
+}

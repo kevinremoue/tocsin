@@ -1,11 +1,11 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT p.name, f.vuln_key AS \"vuln_key!\", f.purls AS \"purls!\", f.state,\n                  f.justification, f.detail\n           FROM findings f JOIN projects p ON p.id = f.project_id\n           WHERE f.vuln_ids && ARRAY(SELECT id FROM vulnerabilities WHERE $1 = ANY (cve_ids))\n           ORDER BY f.suppressed, p.name",
+  "query": "SELECT p.name AS \"name!\", f.vuln_key AS \"vuln_key!\", f.purls AS \"purls!\", f.state,\n                  f.justification, f.detail, f.suppressed AS \"suppressed!\"\n           FROM findings f JOIN projects p ON p.id = f.project_id\n           WHERE f.vuln_ids && ARRAY(SELECT id FROM vulnerabilities WHERE $1 = ANY (cve_ids))\n           ORDER BY p.name",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "name",
+        "name": "name!",
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -68,6 +68,17 @@
             "name": "detail"
           }
         }
+      },
+      {
+        "ordinal": 6,
+        "name": "suppressed!",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "findings",
+            "name": "suppressed"
+          }
+        }
       }
     ],
     "parameters": {
@@ -81,8 +92,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "1bccc2ac74d76b35ac93049640b337a94b5a37bc54e8ed9bca0fe9ae63109913"
+  "hash": "0df9256398821e661ed24255f209877423802f2d6ba65f8fe230f4ad28cbdd01"
 }

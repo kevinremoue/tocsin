@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM analyses WHERE vuln_key = ANY($1)\n             AND NOT EXISTS (SELECT 1 FROM vulnerabilities WHERE canonical_id = vuln_key)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "8b5d8ec89618036e2a1dc18cd8f8e80088ef48f44ca32d975f819b5dfd2d00c9"
+}

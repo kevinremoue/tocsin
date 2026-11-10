@@ -209,7 +209,7 @@ pub fn page(viewer: &Viewer, title: &str, nav: Nav, body: Markup) -> Markup {
 /// parameter is never echoed).
 pub fn flash(done: Option<&str>) -> Markup {
     let message = match done {
-        Some("audited") => "Audit decision saved.",
+        Some("audited") => "Analysis saved.",
         Some("policy-created") => "Policy created.",
         Some("policy-deleted") => "Policy deleted.",
         _ => return html! {},
@@ -281,23 +281,32 @@ pub fn justification_label(j: &str) -> String {
 /// The audit state of a finding of `project`, as a badge; for admins, a badge that opens a form
 /// recording the decision. `return_to` is the page to come back to after a plain form post.
 /// Without JavaScript the `<details>` element still opens and the form posts normally.
-pub struct Audit<'a> {
+pub struct AnalysisCell<'a> {
     pub project: &'a str,
     pub vuln_key: &'a str,
     pub state: Option<&'a str>,
+    pub suppressed: bool,
     pub justification: Option<&'a str>,
     pub detail: Option<&'a str>,
 }
 
-pub fn audit_cell(viewer: &Viewer, a: &Audit, return_to: &str) -> Markup {
+pub fn analysis_cell(viewer: &Viewer, a: &AnalysisCell, return_to: &str) -> Markup {
+    let badge = || {
+        html! {
+            (analysis_badge(a.state))
+            @if matches!(a.state, Some("not_affected" | "false_positive" | "resolved")) && !a.suppressed {
+                " " span.badge.error title="Rationale retained; this analysis does not suppress current evidence" { "Pending revalidation" }
+            }
+        }
+    };
     if !viewer.can_write {
-        return analysis_badge(a.state);
+        return badge();
     }
     let action = format!("/projects/{}/analyses/{}", a.project, a.vuln_key);
     html! {
         details.audit {
-            summary title="Record an audit decision" {
-                @if a.state.is_some() { (analysis_badge(a.state)) } @else { span.muted { "Audit" } }
+            summary title="Record an analysis" {
+                @if a.state.is_some() { (badge()) } @else { span.muted { "Analyze" } }
             }
             form method="post" action=(action) hx-post=(action) hx-target="closest td"
                 hx-swap="innerHTML" hx-disabled-elt="find button" {

@@ -1,6 +1,6 @@
 # Alerts
 
-Tocsin posts a message when a project is affected by a vulnerability that matches an alert rule. Each (project, vulnerability, rule) is notified **only once**: a vulnerability that stays in your stack does not ping you again on every release.
+Tocsin posts a message when a project is affected by a vulnerability that matches an alert rule. Each (project, vulnerability, rule) is notified **once per actionable episode**: remaining actionable across releases or a cosmetic rename does not notify again, but returning after suppression or confirmed absence can.
 
 ## Rules
 
@@ -42,3 +42,7 @@ One message is sent per project and evaluation, listing the new vulnerabilities:
 - Evaluations take a database lock, so several instances (serverless scaling) never send the same alert twice.
 
 The **Alerts** page of the dashboard lists the alerts sent, and the current rules. The notifier is pluggable: more channels (Slack, email, generic webhooks) are on the [roadmap](roadmap.md).
+
+## Actionable episodes
+
+Each rule notifies at most once during an uninterrupted present, unsuppressed episode. Confirmed absence or validated suppression ends the episode; becoming actionable again starts a new one. Threshold oscillation and changes to matched components while still actionable do not reset delivery history. Delivery failures are retried and can produce duplicate messages.

@@ -2,7 +2,7 @@
 //!
 //! Plain posts redirect back with a fixed confirmation (`?done=…`) or render a result page;
 //! htmx posts (`HX-Request`) get the HTML fragment to swap in place.
-use super::{Audit, Nav, Viewer, audit_cell, error_response, is_htmx, page};
+use super::{AnalysisCell, Nav, Viewer, analysis_cell, error_response, is_htmx, page};
 use crate::api::{self, ApiError, AppState, MAX_DOCUMENT, internal};
 use axum::{
     Extension, Form, Router,
@@ -108,7 +108,7 @@ fn with_done(path: &str, done: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Audit
+// Analyses
 
 #[derive(Deserialize)]
 struct AuditForm {
@@ -147,14 +147,17 @@ async fn audit(
     if !is_htmx(&headers) {
         return Ok(Redirect::to(&with_done(&return_to, "audited")).into_response());
     }
-    let audit = Audit {
+    let suppressed: bool = sqlx::query_scalar("SELECT COALESCE((SELECT suppressed FROM findings WHERE project_id=$1 AND vuln_key=$2), false)")
+        .bind(project_id).bind(&key).fetch_one(&st.db).await.map_err(|e| fail(internal(e)))?;
+    let audit = AnalysisCell {
         project: &name,
         vuln_key: &key,
         state: analysis.as_ref().map(|a| a.state.as_str()),
+        suppressed,
         justification: analysis.as_ref().and_then(|a| a.justification.as_deref()),
         detail: analysis.as_ref().and_then(|a| a.detail.as_deref()),
     };
-    Ok(audit_cell(&viewer, &audit, &return_to).into_response())
+    Ok(analysis_cell(&viewer, &audit, &return_to).into_response())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -311,7 +314,7 @@ async fn import_vex(
     let body = html! {
         p.muted { a href={ "/projects/" (name) } { "← " (name) } }
         h1 { "VEX imported" }
-        p.flash role="status" { (stats.imported) " audit decisions imported." }
+        p.flash role="status" { (stats.imported) " analyses imported." }
         @if !stats.skipped.is_empty() {
             h2 { "Skipped " span.muted { "(" (stats.skipped.len()) ")" } }
             ul { @for s in &stats.skipped { li { (s) } } }

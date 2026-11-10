@@ -1,6 +1,6 @@
 use super::{
-    Audit, Nav, PAGE_SIZE, Viewer, audit_cell, kev_status, like_pattern, not_found, page, pager,
-    purl_list, safe_links, search_term, url,
+    AnalysisCell, Nav, PAGE_SIZE, Viewer, analysis_cell, kev_status, like_pattern, not_found, page,
+    pager, purl_list, safe_links, search_term, url,
 };
 use crate::api::{ApiResult, AppState, internal};
 use axum::{
@@ -32,15 +32,13 @@ pub async fn list(
     let affecting = query.affecting.is_some();
     let page_no = query.page.unwrap_or(1).max(1);
 
-    // Projects whose latest release contains an advisory for the CVE (audit decisions aside)
+    // Affected projects: an unsuppressed finding for a vulnerability carrying the CVE
     let entries = sqlx::query!(
         r#"WITH affected AS (
-               SELECT k.cve_id, count(DISTINCT ls.project_id) AS projects
+               SELECT k.cve_id, count(DISTINCT f.project_id) AS projects
                FROM kev_entries k
                JOIN vulnerabilities v ON k.cve_id = ANY (v.cve_ids) AND NOT v.withdrawn
-               JOIN component_vulns cv ON cv.vuln_id = v.id
-               JOIN components c ON c.purl = cv.purl
-               JOIN latest_sboms ls ON ls.id = c.sbom_id
+               JOIN findings f ON f.vuln_key = v.canonical_id AND NOT f.suppressed
                GROUP BY k.cve_id)
            SELECT k.cve_id, k.vendor_project, k.product, k.name, k.known_ransomware,
                   to_char(k.date_added, 'YYYY-MM-DD') AS "date_added!",
@@ -152,17 +150,20 @@ pub async fn entry(
     .map_err(internal)?
     .ok_or_else(|| not_found("CVE in the KEV catalog"))?;
 
-    let affected = sqlx::query!(
-        r#"SELECT p.name, f.vuln_key AS "vuln_key!", f.purls AS "purls!", f.state,
-                  f.justification, f.detail
+    let matched = sqlx::query_as!(
+        Matched,
+        r#"SELECT p.name AS "name!", f.vuln_key AS "vuln_key!", f.purls AS "purls!", f.state,
+                  f.justification, f.detail, f.suppressed AS "suppressed!"
            FROM findings f JOIN projects p ON p.id = f.project_id
            WHERE f.vuln_ids && ARRAY(SELECT id FROM vulnerabilities WHERE $1 = ANY (cve_ids))
-           ORDER BY f.suppressed, p.name"#,
+           ORDER BY p.name"#,
         cve
     )
     .fetch_all(&st.db)
     .await
     .map_err(internal)?;
+
+    let (suppressed, affected): (Vec<_>, Vec<_>) = matched.into_iter().partition(|m| m.suppressed);
 
     let nvd = format!("https://nvd.nist.gov/vuln/detail/{}", e.cve_id);
     // CISA's notes often include the NVD page already
@@ -211,24 +212,47 @@ pub async fn entry(
 
             h2 { "Affected projects " span.muted { "(" (affected.len()) ")" } }
             @if affected.is_empty() {
-                p.muted { "No project's latest release contains a component affected by this CVE." }
+                p.muted { "No project has an unsuppressed finding for this CVE." }
             } @else {
-                div.scroll { table {
-                    thead { tr { th { "Project" } th { "Vulnerability" } th { "Components" } th { "Analysis" } } }
-                    tbody { @for a in &affected { tr {
-                        td { a href={ "/projects/" (a.name) } { (a.name) } }
-                        td.nowrap { a href={ "/vulns/" (a.vuln_key) } { code { (a.vuln_key) } } }
-                        td { (purl_list(&a.purls)) }
-                        td { (audit_cell(&viewer, &Audit {
-                            project: &a.name,
-                            vuln_key: &a.vuln_key,
-                            state: a.state.as_deref(),
-                            justification: a.justification.as_deref(),
-                            detail: a.detail.as_deref(),
-                        }, &format!("/kev/{}", e.cve_id))) }
-                    } } }
-                } }
+                (matched_table(&viewer, &affected, &e.cve_id))
+            }
+            @if !suppressed.is_empty() {
+                h2 { "Suppressed " span.muted { "(" (suppressed.len()) ")" } }
+                p.muted { "Matched, but their analysis says they are not at risk." }
+                (matched_table(&viewer, &suppressed, &e.cve_id))
             }
         },
     ))
+}
+
+/// A project matched by the CVE, with its finding's analysis.
+struct Matched {
+    name: String,
+    vuln_key: String,
+    purls: Vec<String>,
+    state: Option<String>,
+    justification: Option<String>,
+    detail: Option<String>,
+    suppressed: bool,
+}
+
+fn matched_table(viewer: &Viewer, rows: &[Matched], cve: &str) -> Markup {
+    html! {
+        div.scroll { table {
+            thead { tr { th { "Project" } th { "Vulnerability" } th { "Components" } th { "Analysis" } } }
+            tbody { @for a in rows { tr {
+                td { a href={ "/projects/" (a.name) } { (a.name) } }
+                td.nowrap { a href={ "/vulns/" (a.vuln_key) } { code { (a.vuln_key) } } }
+                td { (purl_list(&a.purls)) }
+                td { (analysis_cell(viewer, &AnalysisCell {
+                    project: &a.name,
+                    vuln_key: &a.vuln_key,
+                    state: a.state.as_deref(),
+                                suppressed: a.suppressed,
+                    justification: a.justification.as_deref(),
+                    detail: a.detail.as_deref(),
+                }, &format!("/kev/{cve}"))) }
+            } } }
+        } }
+    }
 }

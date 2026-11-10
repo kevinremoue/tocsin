@@ -8,17 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- SBOM intake: `POST /api/sboms` with a project token, CycloneDX JSON, gzip-compressed uploads accepted; component purls and licenses extracted, nested components included.
-- Vulnerability matching through OSV.dev for every component, during the push (bounded to 60 s) and in the refresh job; advisories grouped by CVE, severity from GitHub ratings or CVSS v3 scores.
+- SBOM intake: `POST /api/sboms` with a project token, CycloneDX JSON, gzip-compressed uploads accepted; component purls and licenses extracted, nested components included. The last release pushed, a re-push included, is the one in production.
+- Vulnerability matching through OSV.dev for every component, during the push (bounded to 60 s) and in the refresh job; advisories sharing a CVE grouped into one vulnerability, transitively, which keeps its analyses and alerts when renamed (an advisory gaining a CVE); severity from GitHub ratings or CVSS v3 scores.
 - CISA KEV catalog sync with conditional requests; KEV findings flagged everywhere.
-- Google Chat alerts, once per project and vulnerability: KEV by default (`TOCSIN_ALERT_KEV`), optional severity threshold (`TOCSIN_ALERT_MIN_SEVERITY`).
-- Auditing with CycloneDX VEX states and justifications; VEX export and import.
+- Google Chat alerts, once per project, vulnerability and rule: KEV by default (`TOCSIN_ALERT_KEV`), optional severity threshold (`TOCSIN_ALERT_MIN_SEVERITY`).
+- Analyses with CycloneDX VEX states and justifications; VEX export and import. Vulnerability and KEV pages list affected and suppressed projects separately.
 - Policies on licenses, severity and KEV, with violations.
 - EPSS scores from FIRST's daily file (`epss-sync` job, conditional download, only known CVEs kept): shown on findings, used to order them, `epss` policy kind and `TOCSIN_ALERT_MIN_EPSS` alert rule.
 - Daily metrics per project.
 - Findings API for CI gating: `GET /api/projects/{name}/findings`.
 - Dashboard: portfolio, projects, vulnerabilities, KEV catalog, policies, alerts; protected by the admin token.
-- Dashboard actions, admin only: audit findings in place, create projects (token shown once), upload SBOMs (gzip accepted), export and import VEX, create and delete policies, run jobs; findings filters and a history chart. Forms work without JavaScript; htmx (embedded) updates pages in place. Cross-site posts are refused, and pages carry a Content-Security-Policy.
+- Dashboard actions, admin only: record analyses in place, create projects (token shown once), upload SBOMs (gzip accepted), export and import VEX, create and delete policies, run jobs; findings filters and a history chart. Forms work without JavaScript; htmx (embedded) updates pages in place. Cross-site posts are refused, and pages carry a Content-Security-Policy.
 - Commands `serve`, `migrate`, `kev-sync`, `epss-sync` and `refresh`; jobs also over `POST /api/jobs/{job}`; optional in-process scheduler (`TOCSIN_SCHEDULER`). Graceful shutdown on SIGTERM.
 - Distroless Docker image, Docker Compose setup, documentation site with a Cloud Run guide.
 

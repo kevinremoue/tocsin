@@ -78,11 +78,11 @@ Go to <http://localhost:3000>. Your browser asks for credentials: use any user n
 - **Projects** shows the portfolio: findings per project and severity, KEV first.
 - Click a project to see its vulnerabilities, policy violations, history, releases and components. From there you can also audit findings, upload another release and export or import VEX.
 - You can also create projects from the dashboard, manage **Policies**, and run the jobs from the **Projects** page.
-- **Vulnerabilities** lists every flaw across projects; **KEV catalog** browses the catalog and shows which entries affect you.
+- **Vulnerabilities** lists every vulnerability affecting your projects; **KEV catalog** browses the catalog and shows which entries affect you.
 
 ## Next steps
 
-- Automate the push in your pipelines, and fail builds that ship a KEV CVE: [Pushing SBOMs from CI](ci-integration.md).
+- Automate post-deployment production declarations in your pipelines: [Pushing SBOMs from CI](ci-integration.md).
 - Triage findings: [Vulnerabilities and auditing](vulnerabilities.md).
 - Get notified: [Alerts](alerts.md).
 - Run Tocsin for your team: [Deploying Tocsin](deployment.md), or [serverless on Cloud Run](cloud-run.md).

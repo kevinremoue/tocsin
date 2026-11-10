@@ -1,8 +1,10 @@
 mod alerts;
 mod api;
 mod config;
+mod coverage;
 mod epss;
 mod http;
+mod identity;
 mod jobs;
 mod kev;
 mod osv;

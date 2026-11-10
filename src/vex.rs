@@ -1,4 +1,4 @@
-//! Audit states and CycloneDX VEX export/import.
+//! Analysis states and CycloneDX VEX export/import.
 use serde_json::{Value, json};
 use sqlx::PgPool;
 
@@ -72,22 +72,18 @@ impl Analysis {
     }
 }
 
-/// Records (`Some`) or removes (`None`) the decision on a flaw, named by its canonical ID or
-/// any advisory ID, then records today's metrics. Returns the canonical ID.
+/// Records (`Some`) or removes (`None`) the analysis of a vulnerability, named by its current
+/// name, any advisory ID or any of its CVEs, then records today's metrics. Returns the canonical ID.
 pub async fn record(
     db: &PgPool,
     project_id: i64,
     vuln: &str,
     analysis: Option<&Analysis>,
 ) -> sqlx::Result<String> {
-    // An advisory ID (GHSA-…) is recorded against the flaw it describes
-    let key = sqlx::query_scalar!(
-        "SELECT canonical_id FROM vulnerabilities WHERE id = $1",
-        vuln
-    )
-    .fetch_optional(db)
-    .await?
-    .unwrap_or_else(|| vuln.to_owned());
+    // An advisory ID (GHSA-…) is recorded against the vulnerability it describes
+    let key = crate::identity::resolve(db, vuln)
+        .await?
+        .unwrap_or_else(|| vuln.to_owned());
     match analysis {
         Some(a) => upsert(db, project_id, &key, a).await?,
         None => {
@@ -123,6 +119,8 @@ pub async fn upsert(
     )
     .execute(db)
     .await?;
+    sqlx::query("UPDATE analyses SET evidence = finding_evidence(project_id, vuln_key) WHERE project_id = $1 AND vuln_key = $2")
+        .bind(project_id).bind(vuln_key).execute(db).await?;
     Ok(())
 }
 
@@ -137,7 +135,8 @@ pub async fn export(db: &PgPool, project_id: i64, project: &str) -> sqlx::Result
     .await?;
     let findings = sqlx::query!(
         r#"SELECT vuln_key AS "vuln_key!", severity AS "severity!", purls AS "purls!",
-                  summary, state, justification, detail
+                  summary, state, justification, detail, suppressed AS "suppressed!",
+                  finding_evidence(project_id, vuln_key) AS evidence
            FROM findings WHERE project_id = $1 ORDER BY vuln_key"#,
         project_id
     )
@@ -160,7 +159,9 @@ pub async fn export(db: &PgPool, project_id: i64, project: &str) -> sqlx::Result
             if let Some(summary) = f.summary {
                 v["description"] = json!(summary);
             }
+            v["properties"] = json!([{ "name": "tocsin:evidence", "value": f.evidence.map(|e| e.to_string()) }]);
             if let Some(state) = f.state {
+                let state = if matches!(state.as_str(), "not_affected" | "false_positive" | "resolved") && !f.suppressed { "in_triage" } else { &state };
                 let mut analysis = json!({ "state": state });
                 if let Some(j) = f.justification {
                     analysis["justification"] = json!(j);
@@ -198,7 +199,7 @@ pub struct ImportStats {
 }
 
 /// Applies the `analysis` of each vulnerability of a CycloneDX VEX document. Advisory IDs are
-/// mapped to the flaw they describe (e.g. GHSA-… to its CVE), so either form works.
+/// mapped to the vulnerability they describe (e.g. GHSA-… to its CVE), so either form works.
 pub async fn import(db: &PgPool, project_id: i64, doc: &Value) -> anyhow::Result<ImportStats> {
     let Some(vulns) = doc["vulnerabilities"].as_array() else {
         anyhow::bail!("not a VEX document: no vulnerabilities array");
@@ -207,6 +208,7 @@ pub async fn import(db: &PgPool, project_id: i64, doc: &Value) -> anyhow::Result
         imported: 0,
         skipped: Vec::new(),
     };
+    let mut accepted = Vec::new();
     for v in vulns {
         let Some(id) = v["id"].as_str() else {
             stats.skipped.push("(vulnerability without id)".into());
@@ -227,10 +229,44 @@ pub async fn import(db: &PgPool, project_id: i64, doc: &Value) -> anyhow::Result
                 continue;
             }
         };
-        let key = sqlx::query_scalar!("SELECT canonical_id FROM vulnerabilities WHERE id = $1", id)
-            .fetch_optional(db)
+        let key = crate::identity::resolve(db, id)
             .await?
             .unwrap_or_else(|| id.to_owned());
+        if matches!(
+            analysis.state.as_str(),
+            "not_affected" | "false_positive" | "resolved"
+        ) {
+            let evidence: Option<Value> = sqlx::query_scalar("SELECT finding_evidence($1, $2)")
+                .bind(project_id)
+                .bind(&key)
+                .fetch_one(db)
+                .await?;
+            let supplied = v["properties"]
+                .as_array()
+                .and_then(|p| p.iter().find(|p| p["name"] == "tocsin:evidence"))
+                .and_then(|p| p["value"].as_str())
+                .and_then(|s| serde_json::from_str::<Value>(s).ok());
+            let current: Vec<String> = sqlx::query_scalar(
+                "SELECT unnest(purls) FROM findings WHERE project_id = $1 AND vuln_key = $2",
+            )
+            .bind(project_id)
+            .bind(&key)
+            .fetch_all(db)
+            .await?;
+            let mut refs: Vec<String> = v["affects"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|a| a["ref"].as_str().map(String::from))
+                .collect();
+            refs.sort();
+            if evidence.is_none() || supplied != evidence || refs != current {
+                anyhow::bail!("{id}: suppression does not unambiguously match current evidence");
+            }
+        }
+        accepted.push((key, analysis));
+    }
+    for (key, analysis) in accepted {
         upsert(db, project_id, &key, &analysis).await?;
         stats.imported += 1;
     }

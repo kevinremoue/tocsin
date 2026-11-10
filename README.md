@@ -16,7 +16,7 @@ It is a single 10 MB Rust binary using about 20 MB of memory, with Postgres as i
 ## Features
 
 - **SBOM intake** over a REST API: CycloneDX JSON, gzip accepted, one SBOM per release. Tocsin matches each project's latest release, which is what runs in production.
-- **All known vulnerabilities** for each component, matched by [package URL](https://github.com/package-url/purl-spec) through OSV.dev (GitHub Advisories, PyPI, npm, Maven, Go, RustSec, Debian, Alpine, …), with severity and CVSS score. Advisories describing the same flaw are grouped under its CVE.
+- **All known vulnerabilities** for each component, matched by [package URL](https://github.com/package-url/purl-spec) through OSV.dev (GitHub Advisories, PyPI, npm, Maven, Go, RustSec, Debian, Alpine, …), with severity and CVSS score. Advisories sharing a CVE are grouped into one vulnerability, named by that CVE.
 - **Actively exploited first**: CVEs in the CISA KEV catalog are flagged everywhere and trigger alerts.
 - **Likely to be exploited next**: each finding's EPSS score, from FIRST's daily file.
 - **Alerts** on Google Chat, once per project and vulnerability: on KEV CVEs by default, and optionally above a severity or EPSS threshold.

@@ -28,7 +28,7 @@ mise run dev     # Postgres on port 5433, migrations, then cargo run
 
 ```sh
 mise run dev      # terminal 1: Postgres, migrations, Tocsin on http://localhost:3000
-mise run seed     # terminal 2: creates the projects, pushes their SBOMs, adds policies and audit decisions
+mise run seed     # terminal 2: creates the projects, pushes their SBOMs, adds policies and analyses
 ```
 
 Seeding queries the real OSV.dev and CISA feeds, so it needs network access and takes a few seconds. Then open <http://localhost:3000> and log in with any user name and the development admin token, `dev-admin-token` (set in `mise.toml`). To start over: stop the server, `mise run db:reset`, start it again.

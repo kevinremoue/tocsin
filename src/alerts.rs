@@ -1,4 +1,4 @@
-//! Alerts: findings matching an alert rule are notified once per (project, flaw, rule).
+//! Alerts: findings matching an alert rule are notified once per (project, vulnerability, rule).
 //!
 //! Rules: `kev` (the finding is in the CISA KEV catalog), `severity` (the finding is at
 //! least `TOCSIN_ALERT_MIN_SEVERITY`) and `epss` (its EPSS score is at least
@@ -12,7 +12,7 @@ use sqlx::PgPool;
 use std::collections::BTreeMap;
 
 /// Advisory-lock key serializing alert evaluation across instances (b"tocsin_a" as i64).
-const LOCK_KEY: i64 = 0x746f_6373_696e_5f61;
+pub(crate) const LOCK_KEY: i64 = 0x746f_6373_696e_5f61;
 
 #[derive(Debug, Clone)]
 pub struct Finding {
@@ -119,18 +119,26 @@ pub(crate) async fn evaluate(
     notifier: Option<&impl Notifier>,
     project_id: Option<i64>,
 ) -> anyhow::Result<usize> {
-    let Some(notifier) = notifier else {
-        return Ok(0);
-    };
-    if !config.alert_kev && config.alert_min_severity.is_none() && config.alert_min_epss.is_none() {
-        return Ok(0);
-    }
-
     let mut tx = db.begin().await?;
-    // Two instances evaluating at once would send the same alert twice
+    // Serialize reconciliation, identity merges and delivery history across instances.
     sqlx::query!("SELECT pg_advisory_xact_lock($1)", LOCK_KEY)
         .execute(&mut *tx)
         .await?;
+    sqlx::query("SELECT reconcile_findings()")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SELECT capture_evaluations($1)")
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await?;
+    let Some(notifier) = notifier else {
+        tx.commit().await?;
+        return Ok(0);
+    };
+    if !config.alert_kev && config.alert_min_severity.is_none() && config.alert_min_epss.is_none() {
+        tx.commit().await?;
+        return Ok(0);
+    }
     let rows = sqlx::query!(
         r#"SELECT f.project_id AS "project_id!", p.name, f.vuln_key AS "vuln_key!",
                   f.severity AS "severity!", f.kev AS "kev!", f.epss, f.summary,
@@ -146,7 +154,9 @@ pub(crate) async fn evaluate(
            WHERE r.applies AND NOT f.suppressed
              AND ($3::bigint IS NULL OR f.project_id = $3)
              AND NOT EXISTS (SELECT 1 FROM alerts a WHERE a.project_id = f.project_id
-                             AND a.vuln_key = f.vuln_key AND a.rule = r.rule)
+                             AND a.vuln_key = f.vuln_key AND a.rule = r.rule
+                              AND a.episode = (SELECT episode FROM finding_episodes e
+                                  WHERE e.project_id = f.project_id AND e.vuln_key = f.vuln_key))
            ORDER BY p.name, f.kev DESC, f.epss DESC NULLS LAST, f.severity DESC, f.vuln_key"#,
         config.alert_kev,
         config.alert_min_severity.map(Severity::rank),
@@ -156,7 +166,7 @@ pub(crate) async fn evaluate(
     .fetch_all(&mut *tx)
     .await?;
 
-    // Per project: findings (one per flaw, even if several rules apply) and the rules to record
+    // Per project: findings (one per vulnerability, even if several rules apply) and the rules to record
     let mut by_project: BTreeMap<(String, i64), Vec<PendingAlert>> = BTreeMap::new();
     for r in rows {
         let findings = by_project.entry((r.name, r.project_id)).or_default();
@@ -187,8 +197,9 @@ pub(crate) async fn evaluate(
         for (f, rules) in &findings {
             for rule in rules {
                 sqlx::query!(
-                    "INSERT INTO alerts (project_id, vuln_key, rule, severity, kev)
-                     VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+                    "INSERT INTO alerts (project_id, vuln_key, rule, severity, kev, episode)
+                     VALUES ($1, $2, $3, $4, $5, (SELECT episode FROM finding_episodes
+                         WHERE project_id = $1 AND vuln_key = $2)) ON CONFLICT DO NOTHING",
                     project_id,
                     f.vuln_key,
                     rule,

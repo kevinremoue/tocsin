@@ -10,12 +10,12 @@ CI pipeline ──(CycloneDX SBOM)──▶ Tocsin ◀── OSV.dev (advisories
 
 ## SBOM intake
 
-Each project's CI pushes a CycloneDX JSON SBOM when it builds a production release. Tocsin stores:
+Each project's CI pushes a CycloneDX JSON SBOM after successfully deploying a production release. Tocsin stores:
 
 - the raw document, one per (project, version);
 - the deduplicated list of component purls with their declared licenses, nested components included.
 
-The **latest release** of each project is its reference SBOM: it represents what runs in production, and it is the one Tocsin matches, measures and alerts on.
+The **latest release** of each project is the last one pushed, a re-push included: it represents what runs in production, and it is the one Tocsin matches, measures and alerts on. A project has one release in production at a time; pushing a hotfix for an older branch makes it the latest until the next push.
 
 ## Matching key: the package URL
 
@@ -31,7 +31,9 @@ Matching runs during SBOM pushes (for components not matched recently) and in th
 
 Advisories are stored in the [OSV schema](https://ossf.github.io/osv-schema/), which is also the common format for future sources. Their CVE IDs come from the advisory's ID, its `aliases` and its `upstream` field. Withdrawn advisories are kept but ignored.
 
-**Findings** group the advisories of a project's latest release by flaw: advisories sharing a CVE become one finding, named by that CVE, with the highest severity among them. See [Vulnerabilities and auditing](vulnerabilities.md) for severity and audit states.
+A **vulnerability** groups the advisories sharing a CVE, transitively: an advisory listing two CVEs joins the advisories of both. It is named by one of its CVEs (the one its advisories already carry, so names stay stable, otherwise the oldest), or by the ID of an advisory without CVE. A **finding** is a vulnerability matched in a project's latest release, with the highest severity among its advisories. See [Vulnerabilities and auditing](vulnerabilities.md) for severity and analysis states.
+
+Names change when sources do: an advisory gains a CVE, or a new advisory links two vulnerabilities. Each time advisories are stored, Tocsin regroups them; analyses and sent alerts move to the new name, because they belong to the vulnerability, not to its name. When two analyses of a project meet, the one that does not suppress the finding wins (otherwise the most recent), and the other is noted in its detail. Old names keep working in URLs and in the API.
 
 ## KEV catalog sync
 
@@ -59,11 +61,11 @@ After each push, KEV sync, EPSS sync and refresh, Tocsin looks for findings that
 
 ## Metrics
 
-Each push, audit decision and job records today's counts for the affected projects: findings per severity, KEV findings, suppressed findings, components. One row per project and day forms the history shown on the project page.
+Each push, analysis and job records today's counts for the affected projects: findings per severity, KEV findings, suppressed findings, components. One row per project and day forms the history shown on the project page.
 
 ## Serverless design
 
-The server keeps no state between requests and runs no background work unless `TOCSIN_SCHEDULER=true`. Everything periodic is a job that runs once and exits, triggered from outside. Work inside a request is bounded: matching during a push stops after 60 seconds and is completed by the next refresh. Alert evaluation takes a Postgres advisory lock, so concurrent instances do not send duplicates.
+The server keeps no state between requests and runs no background work unless `TOCSIN_SCHEDULER=true`. Everything periodic is a job that runs once and exits, triggered from outside. Work inside a request is bounded: matching during a push stops after 60 seconds and is completed by the next refresh. Alert evaluation takes a Postgres advisory lock, to serialize concurrent delivery attempts; ambiguous webhook failures can still cause duplicates on retry.
 
 ## Data model
 
@@ -75,15 +77,21 @@ The server keeps no state between requests and runs no background work unless `T
 | `vulnerabilities` | Advisories in the OSV schema: CVE IDs, grouping key, severity, CVSS, raw document. |
 | `component_vulns` | Which advisories affect which purl. |
 | `purl_scans` | When each purl was last matched. |
-| `analyses` | Audit decisions per project and flaw. |
+| `analyses` | Analyses, per project and vulnerability. |
 | `kev_entries`, `kev_sync` | The KEV catalog, and the state of its sync. |
 | `epss_scores`, `epss_sync` | EPSS scores of known CVEs, and the state of their sync. |
-| `alerts` | Alerts sent, one per (project, flaw, rule). |
+| `alerts` | Alerts sent, one per (project, vulnerability, rule). |
 | `policies` | Policy rules. |
 | `project_metrics` | Daily counts per project. |
 
-The views `latest_sboms` (each project's latest release) and `findings` (advisories grouped per project and flaw, with their audit state) are what most pages and endpoints query.
+The views `latest_sboms` (each project's latest release) and `findings` (advisories grouped per project and vulnerability, with their analysis) are what most pages and endpoints query.
 
 ## Stack
 
 Tocsin is written in Rust with [axum](https://github.com/tokio-rs/axum) and [sqlx](https://github.com/launchbadge/sqlx) on Postgres. The dashboard is rendered on the server with [maud](https://maud.lambda.xyz/), which escapes every value. Its forms work without JavaScript; [htmx](https://htmx.org) (about 14 KB, embedded in the binary) updates parts of a page in place. There is no frontend build and no Node toolchain. HTTPS uses rustls.
+
+## Production declaration and evidence limits
+
+Upload only after successful production deployment. The last accepted upload wins, including a rollback to an older version; serialize deployments and uploads in the caller. Tocsin does not stage candidates or gate deployment.
+
+The upload and findings responses expose `coverage` separately from `matching` processing status: total supplied components, usable versioned identifiers, successfully evaluated components, gap reasons, separate license gaps, and per-identifier last-successful evaluation provenance. Counts describe known matches, never a safety assessment.

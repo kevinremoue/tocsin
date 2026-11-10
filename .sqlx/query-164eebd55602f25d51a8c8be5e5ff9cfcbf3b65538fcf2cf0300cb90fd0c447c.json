@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT state, justification, detail,\n                          extract(epoch FROM updated_at)::float8 AS \"updated_at!\"\n                   FROM analyses WHERE project_id = $1 AND vuln_key = $2",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "state",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "analyses",
+            "name": "state"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "justification",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "analyses",
+            "name": "justification"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "detail",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "analyses",
+            "name": "detail"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "updated_at!",
+        "type_info": "Float8",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      null
+    ]
+  },
+  "hash": "164eebd55602f25d51a8c8be5e5ff9cfcbf3b65538fcf2cf0300cb90fd0c447c"
+}

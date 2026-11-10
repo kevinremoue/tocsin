@@ -1,6 +1,6 @@
 use super::{
-    Audit, Nav, Viewer, audit_cell, card, chart, epss, epss_status, flash, kev_badge, kev_status,
-    like_pattern, not_found, page, purl_list, search_term, severity, url,
+    AnalysisCell, Nav, Viewer, analysis_cell, card, chart, epss, epss_status, flash, kev_badge,
+    kev_status, like_pattern, not_found, page, purl_list, search_term, severity, url,
 };
 use crate::api::{ApiResult, AppState, internal};
 use crate::vulns::Severity;
@@ -81,7 +81,7 @@ pub async fn index(
             } @else {
                 div.scroll { table {
                     thead { tr {
-                        th { "Project" } th { "Latest release" } th { "Released (UTC)" }
+                        th { "Project" } th { "Latest release" } th { "Pushed (UTC)" }
                         th.num { "Components" } th.num { "KEV" } th.num { "Critical" } th.num { "High" }
                         th.num { "Medium" } th.num { "Low" } th.num { "Violations" }
                     } }
@@ -243,6 +243,9 @@ pub async fn project(
     .await
     .map_err(internal)?;
 
+    let coverage = crate::coverage::project(&st.db, project_id)
+        .await
+        .map_err(internal)?;
     let here = format!("/projects/{name}");
     // This page with its current filters, to come back to after an audit
     let return_to = url(
@@ -274,6 +277,7 @@ pub async fn project(
         html! {
             p.muted { a href="/" { "← Projects" } }
             h1 { (name) " " @if let Some(r) = releases.first() { span.muted { (r.version) } } }
+            p.muted { "Known matches only, not a safety assessment. Analyses marked not affected, false positive or resolved may require revalidation when their evidence changes; only validated suppressions are excluded from counts." }
             (flash(query.done.as_deref()))
             @if releases.is_empty() {
                 p.muted { "No SBOM received for this project yet." }
@@ -288,6 +292,7 @@ pub async fn project(
                     (card(violations.len(), "Policy violations", None))
                 }
 
+                (coverage_panel(&coverage))
                 h2 { "Vulnerabilities " span.muted { "(" (findings.len()) ")" } }
                 form.filters method="get" action=(here) {
                     input type="search" name="q" value=(q.unwrap_or_default())
@@ -329,10 +334,11 @@ pub async fn project(
                             td.num { (epss(f.epss)) }
                             td { (f.summary.as_deref().unwrap_or("")) }
                             td { (purl_list(&f.purls)) }
-                            td { (audit_cell(&viewer, &Audit {
+                            td { (analysis_cell(&viewer, &AnalysisCell {
                                 project: &name,
                                 vuln_key: &f.vuln_key,
                                 state: f.state.as_deref(),
+                                suppressed: f.suppressed,
                                 justification: f.justification.as_deref(),
                                 detail: f.detail.as_deref(),
                             }, &return_to)) }
@@ -340,7 +346,7 @@ pub async fn project(
                     } }
                     @if !viewer.can_write {
                         p.muted {
-                            "Record an audit decision with " code { "PUT /api/projects/" (name) "/analyses/{id}" }
+                            "Record an analysis with " code { "PUT /api/projects/" (name) "/analyses/{id}" }
                             ", or import a CycloneDX VEX document."
                         }
                     }
@@ -397,21 +403,21 @@ pub async fn project(
                     h3 { "VEX" }
                     p {
                         a.button href={ (here) "/vex.json" } download { "Download VEX" }
-                        " " span.muted { "The findings and their audit decisions, as CycloneDX 1.6." }
+                        " " span.muted { "The findings and their analyses, as CycloneDX 1.6." }
                     }
                     @if viewer.can_write {
                         form.stack method="post" action={ (here) "/vex" } enctype="multipart/form-data" {
                             input type="file" name="file" required accept=".json,.gz,application/json,application/gzip"
                                 aria-label="VEX file";
                             button type="submit" { "Import VEX" }
-                            span.muted { "Imports the audit decisions of a CycloneDX VEX document." }
+                            span.muted { "Imports the analyses of a CycloneDX VEX document." }
                         }
                     }
                 }
 
                 h2 { "Releases" }
                 div.scroll { table {
-                    thead { tr { th { "Version" } th { "Released (UTC)" } th.num { "Components" } } }
+                    thead { tr { th { "Version" } th { "Pushed (UTC)" } th.num { "Components" } } }
                     tbody { @for r in &releases { tr {
                         td { (r.version) }
                         td.nowrap.muted { (r.released_at) }
@@ -449,4 +455,59 @@ pub async fn vex_download(
     // The name is [A-Za-z0-9._-]: safe in the header
     let disposition = format!("attachment; filename=\"{name}-vex.json\"");
     Ok(([(header::CONTENT_DISPOSITION, disposition)], Json(doc)))
+}
+
+fn coverage_panel(coverage: &serde_json::Value) -> Markup {
+    let n = |key: &str| coverage[key].as_u64().unwrap_or_default();
+    let complete = coverage["complete"].as_bool().unwrap_or(false);
+    let snapshot = &coverage["last_complete_evaluation"];
+    html! {
+        section {
+            h2 { "Matching coverage" }
+            p {
+                (n("evaluated")) " evaluated / " (n("usable_versioned_identifiers"))
+                " usable versioned identifiers / " (n("total_supplied")) " supplied components. "
+                span.badge { @if complete { "Complete matching evidence" } @else { "Incomplete matching evidence" } }
+            }
+            p.muted { "Processing success is not coverage or safety. Known matches only; gaps can hide additional findings." }
+            p { "License declaration gaps: " (n("license_gaps")) " (separate from vulnerability matching)." }
+            @if let Some(gaps) = coverage["gaps"].as_array().filter(|g| !g.is_empty()) {
+                details { summary { "Coverage gaps (" (gaps.len()) ")" }
+                    ul { @for gap in gaps { li {
+                        code { (gap["purl"].as_str().unwrap_or("(no identifier)")) }
+                        " — " (gap["reason"].as_str().unwrap_or("unknown"))
+                    } } }
+                }
+            }
+            details { summary { "Identifier evaluation provenance" }
+                ul { @for evaluation in coverage["identifier_evaluations"].as_array().into_iter().flatten() { li {
+                    code { (evaluation["purl"].as_str().unwrap_or("")) }
+                    " — last successful evaluation: " (evaluation["last_successful_evaluation"].as_str().unwrap_or("never"))
+                    @if evaluation["current"] != true { " (incomplete or failed latest attempt; last-known links retained)" }
+                } } }
+            }
+            @if !complete {
+                h3 { "Last-known complete evaluation" }
+                @if snapshot.is_object() {
+                    p { "Release " code { (snapshot["release"].as_str().unwrap_or("")) }
+                        ", declared " (snapshot["declared_at"].as_str().unwrap_or(""))
+                        ", evaluated " (snapshot["evaluated_at"].as_str().unwrap_or("")) "."
+                    }
+                    p.muted { "Historical evidence, not a claim about the current production release. Historical analysis states do not authorize current suppressions." }
+                    div.scroll { table {
+                        thead { tr { th { "Historical vulnerability" } th { "Matched components" } } }
+                        tbody { @for finding in snapshot["findings"].as_array().into_iter().flatten() { tr {
+                            td { code { (finding["vuln_key"].as_str().unwrap_or("")) } }
+                            td { @for purl in finding["purls"].as_array().into_iter().flatten() { code { (purl.as_str().unwrap_or("")) } br; } }
+                        } } }
+                    } }
+                    @if snapshot["findings"].as_array().is_some_and(|f| f.is_empty()) {
+                        p.muted { "No known matches in that evaluation (not a safety assessment)." }
+                    }
+                } @else {
+                    p.muted { "No complete evaluation has been retained yet." }
+                }
+            }
+        }
+    }
 }

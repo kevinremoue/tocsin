@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO alerts (project_id, vuln_key, rule, severity, kev, episode)\n                     VALUES ($1, $2, $3, $4, $5, (SELECT episode FROM finding_episodes\n                         WHERE project_id = $1 AND vuln_key = $2)) ON CONFLICT DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Int2",
+        "Bool"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "3a10ab43ae80c0e3e739cee7b6ff781ce067f73f0a4a643fa136e53d43d9421a"
+}

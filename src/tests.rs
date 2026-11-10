@@ -19,6 +19,8 @@ use tower::ServiceExt;
 
 const LOG4J: &str = "pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1";
 const LODASH: &str = "pkg:npm/lodash@4.17.20";
+/// Its advisories are set per test in `Calls::widget`, to change them between refreshes
+const WIDGET: &str = "pkg:cargo/widget@1.0.0";
 
 /// Advisories served by the fake OSV, in the OSV schema.
 fn advisory(id: &str) -> Value {
@@ -53,10 +55,15 @@ struct Calls {
     fetches: AtomicUsize,
     chat: Mutex<Vec<String>>,
     chat_fails: std::sync::atomic::AtomicBool,
+    chat_fails_after_delivery: std::sync::atomic::AtomicBool,
+    reject_widget: std::sync::atomic::AtomicBool,
+    reject_lodash_second_page: std::sync::atomic::AtomicBool,
     kev: Mutex<Value>,
     /// EPSS file served, as CSV text (gzipped on the wire)
     epss: Mutex<String>,
     epss_downloads: AtomicUsize,
+    /// Advisories listed for WIDGET, served in full by the advisory endpoint
+    widget: Mutex<Vec<Value>>,
 }
 
 async fn querybatch(
@@ -68,7 +75,12 @@ async fn querybatch(
     for (i, q) in body["queries"].as_array().unwrap().iter().enumerate() {
         let purl = q["package"]["purl"].as_str().unwrap();
         let page = q["page_token"].as_str();
-        if purl.starts_with("pkg:bad/") {
+        if purl.starts_with("pkg:bad/")
+            || (purl == WIDGET && calls.reject_widget.load(Ordering::SeqCst))
+            || (purl == LODASH
+                && page.is_some()
+                && calls.reject_lodash_second_page.load(Ordering::SeqCst))
+        {
             return (
                 StatusCode::BAD_REQUEST,
                 format!(r#"{{"code":3,"message":"error in query at index {i}: invalid purl"}}"#),
@@ -83,6 +95,16 @@ async fn querybatch(
                 json!({ "vulns": [vuln("GHSA-35jh-r3h4-6jhm")], "next_page_token": "p2" })
             }
             (LODASH, Some("p2")) => json!({ "vulns": [vuln("GHSA-29mw-wpgm-hmr9")] }),
+            (WIDGET, _) => {
+                let listed: Vec<Value> = calls
+                    .widget
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|a| json!({ "id": a["id"], "modified": a["modified"] }))
+                    .collect();
+                json!({ "vulns": listed })
+            }
             _ => json!({}),
         });
     }
@@ -91,7 +113,14 @@ async fn querybatch(
 
 async fn vuln(State(calls): State<Arc<Calls>>, Path(id): Path<String>) -> axum::response::Response {
     calls.fetches.fetch_add(1, Ordering::SeqCst);
-    match advisory(&id) {
+    let widget = calls
+        .widget
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == id.as_str())
+        .cloned();
+    match widget.unwrap_or_else(|| advisory(&id)) {
         Value::Null => StatusCode::NOT_FOUND.into_response(),
         mut doc => {
             // Like OSV: advisories carry nanoseconds, the batch endpoint microseconds
@@ -110,7 +139,11 @@ async fn chat(State(calls): State<Arc<Calls>>, Json(body): Json<Value>) -> Statu
         .lock()
         .unwrap()
         .push(body["text"].as_str().unwrap().to_owned());
-    StatusCode::OK
+    if calls.chat_fails_after_delivery.load(Ordering::SeqCst) {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        StatusCode::OK
+    }
 }
 
 async fn kev_feed(State(calls): State<Arc<Calls>>) -> Json<Value> {
@@ -364,7 +397,7 @@ async fn push_matches_groups_advisories_and_alerts_once(db: PgPool) {
         )
         .await;
     assert_eq!(body["matching"], "done");
-    // Log4Shell (two advisories, one finding) + two lodash flaws (one on the second OSV page)
+    // Log4Shell (two advisories, one finding) + two lodash vulnerabilities (one on the second OSV page)
     assert_eq!(
         (
             body["findings"].as_i64(),
@@ -557,9 +590,9 @@ async fn audit_suppresses_and_vex_round_trips(db: PgPool) {
     h.push(&shop, "1.0", &[LOG4J, LODASH]).await;
     h.push(&blog, "1.0", &[LOG4J]).await;
 
-    // Recorded against an advisory ID: mapped to the flaw's CVE
+    // Recorded against an advisory ID: mapped to the vulnerability's CVE
     let (status, body) = h
-        .call("PUT", "/api/projects/shop/analyses/GHSA-jfh8-c2jp-5v3q", Some(&shop),
+        .call("PUT", "/api/projects/shop/analyses/GHSA-jfh8-c2jp-5v3q", Some("admin"),
               Some(json!({ "state": "not_affected", "justification": "code_not_reachable", "detail": "JNDI disabled" })))
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
@@ -568,7 +601,7 @@ async fn audit_suppresses_and_vex_round_trips(db: PgPool) {
         .call(
             "PUT",
             "/api/projects/shop/analyses/CVE-2021-23337",
-            Some(&shop),
+            Some("admin"),
             Some(json!({ "state": "nope" })),
         )
         .await;
@@ -582,7 +615,7 @@ async fn audit_suppresses_and_vex_round_trips(db: PgPool) {
             Some(json!({ "state": "resolved" })),
         )
         .await;
-    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     let ids = |v: &Value| {
         v["findings"]
@@ -622,7 +655,7 @@ async fn audit_suppresses_and_vex_round_trips(db: PgPool) {
 
     // Importing shop's VEX into blog applies the same decision
     let (status, stats) = h
-        .call("POST", "/api/projects/blog/vex", Some(&blog), Some(vex))
+        .call("POST", "/api/projects/blog/vex", Some("admin"), Some(vex))
         .await;
     assert_eq!(status, StatusCode::OK, "{stats}");
     assert_eq!(stats["imported"], 1);
@@ -635,7 +668,7 @@ async fn audit_suppresses_and_vex_round_trips(db: PgPool) {
         .call(
             "DELETE",
             "/api/projects/blog/analyses/CVE-2021-44228",
-            Some(&blog),
+            Some("admin"),
             None,
         )
         .await;
@@ -1060,7 +1093,7 @@ async fn dashboard_actions_cover_the_api(db: PgPool) {
             && !visitor.body.contains("Upload a release")
     );
 
-    // Audit, plain post: redirect back with a fixed confirmation
+    // Analysis, plain post: redirect back with a fixed confirmation
     let audited = h
         .form(
             "/projects/shop/analyses/CVE-2021-44228",
@@ -1091,10 +1124,10 @@ async fn dashboard_actions_cover_the_api(db: PgPool) {
         h.get_page("/projects/shop?done=audited", true)
             .await
             .body
-            .contains("Audit decision saved.")
+            .contains("Analysis saved.")
     );
 
-    // Audit with htmx, by advisory ID: the cell fragment comes back
+    // Analysis with htmx, by advisory ID: the cell fragment comes back
     let fragment = h
         .form(
             "/projects/shop/analyses/GHSA-jfh8-c2jp-5v3q",
@@ -1142,16 +1175,14 @@ async fn dashboard_actions_cover_the_api(db: PgPool) {
     assert!(vex.header("content-disposition").contains("shop-vex.json"));
     assert!(vex.body.contains(r#""bomFormat":"CycloneDX""#));
     let doc = json!({ "bomFormat": "CycloneDX", "specVersion": "1.6", "vulnerabilities": [
-        { "id": "CVE-2021-23337", "analysis": { "state": "false_positive" } },
+        { "id": "CVE-2021-23337", "analysis": { "state": "exploitable" } },
         { "id": "CVE-2020-28500" }
     ] });
     let imported = h
         .upload("/projects/shop/vex", doc.to_string().as_bytes(), &[])
         .await;
     assert_eq!(imported.status, StatusCode::OK, "{}", imported.body);
-    assert!(
-        imported.body.contains("1 audit decisions imported") && imported.body.contains("Skipped")
-    );
+    assert!(imported.body.contains("1 analyses imported") && imported.body.contains("Skipped"));
 
     // Policies: create (valid, invalid), delete with htmx and without
     let created = h
@@ -1263,4 +1294,596 @@ async fn dashboard_writes_need_admin_and_same_origin(db: PgPool) {
     let p = h.page(post(&[("sec-fetch-site", "same-origin")])).await;
     assert_eq!(p.status, StatusCode::FORBIDDEN);
     assert!(!h.get_page("/", false).await.body.contains("New project"));
+}
+
+/// A WIDGET advisory, critical; `modified` changes when its content does.
+fn widget_advisory(id: &str, aliases: &[&str], modified: &str) -> Value {
+    json!({
+        "id": id, "aliases": aliases, "modified": modified,
+        "summary": format!("Widget bug {id}"), "database_specific": { "severity": "CRITICAL" }
+    })
+}
+
+#[sqlx::test]
+async fn vulnerabilities_keep_analyses_and_alerts_when_renamed_or_merged(db: PgPool) {
+    let h = harness(db.clone(), |c| {
+        c.alert_min_severity = Some(crate::vulns::Severity::Critical)
+    })
+    .await;
+    // Two advisories for the widget, seen as two vulnerabilities: one without CVE yet
+    *h.calls.widget.lock().unwrap() = vec![
+        widget_advisory("RUSTSEC-2026-0001", &[], "2026-01-01T00:00:00Z"),
+        widget_advisory(
+            "GHSA-wwww-wwww-wwww",
+            &["CVE-2026-1111"],
+            "2026-01-01T00:00:00Z",
+        ),
+    ];
+    sqlx::query("INSERT INTO kev_entries (cve_id, vendor_project, product, name, date_added, known_ransomware, data)
+                 VALUES ('CVE-2026-1111', 'Acme', 'Widget', 'Widget bug', '2026-11-01', false, '{}')")
+        .execute(&db).await.unwrap();
+    let shop = h.project("shop").await;
+    let blog = h.project("blog").await;
+    let pushed = h.push(&shop, "1.0", &[WIDGET]).await;
+    assert_eq!(pushed["alerted"], 2, "{pushed}");
+    assert_eq!(h.push(&blog, "1.0", &[WIDGET]).await["alerted"], 2);
+    // One message per project, two alerts each
+    assert_eq!(h.chat().len(), 2);
+
+    let analyze = |project: &'static str, vuln: &'static str, body: Value| {
+        let h = &h;
+        async move {
+            let (status, res) = h
+                .call(
+                    "PUT",
+                    &format!("/api/projects/{project}/analyses/{vuln}"),
+                    Some("admin"),
+                    Some(body),
+                )
+                .await;
+            assert_eq!(status, StatusCode::OK, "{res}");
+        }
+    };
+    // shop: the two analyses disagree; blog: only the advisory without CVE is analyzed
+    analyze(
+        "shop",
+        "RUSTSEC-2026-0001",
+        json!({ "state": "not_affected", "detail": "dead code" }),
+    )
+    .await;
+    analyze(
+        "shop",
+        "CVE-2026-1111",
+        json!({ "state": "exploitable", "detail": "reachable" }),
+    )
+    .await;
+    analyze(
+        "blog",
+        "RUSTSEC-2026-0001",
+        json!({ "state": "false_positive" }),
+    )
+    .await;
+
+    // The RUSTSEC advisory gains the CVE: one vulnerability, named by it
+    *h.calls.widget.lock().unwrap() = vec![
+        widget_advisory(
+            "RUSTSEC-2026-0001",
+            &["CVE-2026-1111"],
+            "2026-02-01T00:00:00Z",
+        ),
+        widget_advisory(
+            "GHSA-wwww-wwww-wwww",
+            &["CVE-2026-1111"],
+            "2026-01-01T00:00:00Z",
+        ),
+    ];
+    let (status, result) = h
+        .call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{result}");
+    assert_eq!(result["alerted"], 0, "already alerted under its old name");
+    assert_eq!(h.chat().len(), 2);
+
+    let analyses: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT p.name, a.vuln_key, a.state, a.detail FROM analyses a
+         JOIN projects p ON p.id = a.project_id ORDER BY p.name",
+    )
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        analyses,
+        [
+            // Renamed: moved as is
+            ("blog".into(), "CVE-2026-1111".into(), "false_positive".into(), None),
+            // Merged: the unsuppressed analysis wins, the other is noted
+            (
+                "shop".into(),
+                "CVE-2026-1111".into(),
+                "exploitable".into(),
+                Some("reachable\nMerged: analysis under RUSTSEC-2026-0001 was not_affected: dead code".into())
+            ),
+        ]
+    );
+    let alerts: Vec<String> = sqlx::query_scalar("SELECT DISTINCT vuln_key FROM alerts")
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert_eq!(alerts, ["CVE-2026-1111"]);
+
+    let (_, findings) = h
+        .call("GET", "/api/projects/shop/findings", Some(&shop), None)
+        .await;
+    assert_eq!(findings["findings"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        findings["findings"][0]["advisories"],
+        json!(["GHSA-wwww-wwww-wwww", "RUSTSEC-2026-0001"])
+    );
+
+    // The old name still leads to the vulnerability
+    let page = h.get_page("/vulns/RUSTSEC-2026-0001", true).await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(page.body.contains("<h1>CVE-2026-1111"), "{}", page.body);
+    // Affected and suppressed projects are listed apart
+    assert!(
+        page.body
+            .contains("Affected projects <span class=\"muted\">(1)</span>")
+    );
+    assert!(
+        page.body
+            .contains("Suppressed <span class=\"muted\">(1)</span>")
+    );
+    let kev = h.get_page("/kev/CVE-2026-1111", true).await;
+    assert!(
+        kev.body
+            .contains("Affected projects <span class=\"muted\">(1)</span>")
+    );
+    assert!(
+        kev.body
+            .contains("Suppressed <span class=\"muted\">(1)</span>")
+    );
+    // The catalog counts affected projects only
+    let list = h.get_page("/kev?affecting=on", true).await;
+    assert!(
+        list.body.contains("<strong class=\"error\">1</strong>"),
+        "{}",
+        list.body
+    );
+}
+
+#[sqlx::test]
+async fn the_last_release_pushed_is_the_latest(db: PgPool) {
+    let h = harness(db.clone(), |_| {}).await;
+    let token = h.project("shop").await;
+    let ids = |f: &Value| -> Vec<String> {
+        f["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    h.push(&token, "2.0", &[LOG4J]).await;
+    // A hotfix on an older branch: now the release in production
+    h.push(&token, "1.9.1", &[LODASH]).await;
+    let (_, f) = h
+        .call("GET", "/api/projects/shop/findings", Some(&token), None)
+        .await;
+    assert!(!ids(&f).contains(&"CVE-2021-44228".to_owned()));
+    // Re-pushing 2.0 makes it the latest again
+    h.push(&token, "2.0", &[LOG4J]).await;
+    let (_, f) = h
+        .call("GET", "/api/projects/shop/findings", Some(&token), None)
+        .await;
+    assert_eq!(ids(&f), ["CVE-2021-44228"]);
+}
+
+#[sqlx::test]
+async fn suppressions_bind_evidence_and_reopening_starts_an_episode(db: PgPool) {
+    let h = harness(db.clone(), |c| {
+        c.alert_min_severity = Some(crate::vulns::Severity::Critical)
+    })
+    .await;
+    *h.calls.widget.lock().unwrap() =
+        vec![widget_advisory("WIDGET-1", &[], "2026-01-01T00:00:00Z")];
+    let token = h.project("shop").await;
+    h.push(&token, "1", &[WIDGET]).await;
+    let suppress = json!({"state":"not_affected","detail":"unreachable"});
+    let (status, _) = h
+        .call(
+            "PUT",
+            "/api/projects/shop/analyses/WIDGET-1",
+            Some(&token),
+            Some(suppress.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    h.call(
+        "PUT",
+        "/api/projects/shop/analyses/WIDGET-1",
+        Some("admin"),
+        Some(suppress),
+    )
+    .await;
+    // Cosmetic changes do not invalidate the accepted applicability.
+    h.calls.widget.lock().unwrap()[0]["summary"] = json!("renamed description");
+    h.calls.widget.lock().unwrap()[0]["modified"] = json!("2026-02-01T00:00:00Z");
+    h.call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    let (_, f) = h
+        .call(
+            "GET",
+            "/api/projects/shop/findings?suppressed=true",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(f["findings"][0]["suppressed"], true);
+    // Material applicability changes retain rationale, but require revalidation.
+    h.calls.widget.lock().unwrap()[0]["affected"] =
+        json!([{"package":{"ecosystem":"crates.io","name":"widget"},"versions":["1.0.0"]}]);
+    h.calls.widget.lock().unwrap()[0]["modified"] = json!("2026-03-01T00:00:00Z");
+    h.call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    let (_, f) = h
+        .call("GET", "/api/projects/shop/findings", Some(&token), None)
+        .await;
+    assert_eq!(f["findings"][0]["analysis"]["pending_revalidation"], true);
+    assert_eq!(f["findings"][0]["analysis"]["detail"], "unreachable");
+    assert_eq!(h.chat().len(), 2);
+    h.call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    assert_eq!(h.chat().len(), 2);
+    // Confirmed disappearance followed by reappearance opens another episode.
+    h.calls.widget.lock().unwrap().clear();
+    h.call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    *h.calls.widget.lock().unwrap() =
+        vec![widget_advisory("WIDGET-1", &[], "2026-04-01T00:00:00Z")];
+    h.call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    assert_eq!(h.chat().len(), 3);
+}
+
+#[sqlx::test]
+async fn coverage_counts_all_components_and_vex_rejects_unbound_suppression(db: PgPool) {
+    let h = harness(db, |_| {}).await;
+    let token = h.project("shop").await;
+    let (status, pushed) = h.call("POST", "/api/sboms?version=1", Some(&token), Some(json!({"bomFormat":"CycloneDX","components":[{"name":"unknown"},{"purl":"pkg:npm/unversioned"},{"purl":LOG4J}]}))).await;
+    assert_eq!(status, StatusCode::CREATED, "{pushed}");
+    assert_eq!(pushed["coverage"]["total_supplied"], 3);
+    assert_eq!(pushed["coverage"]["usable_versioned_identifiers"], 1);
+    assert_eq!(pushed["coverage"]["evaluated"], 1);
+    let doc = json!({"vulnerabilities":[{"id":"CVE-2021-44228","affects":[{"ref":LOG4J}],"analysis":{"state":"not_affected"}}]});
+    let (status, _) = h
+        .call("POST", "/api/projects/shop/vex", Some("admin"), Some(doc))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test]
+async fn incomplete_matching_retains_complete_snapshot_across_reupload_and_restart(db: PgPool) {
+    let h = harness(db.clone(), |_| {}).await;
+    let token = h.project("shop").await;
+    h.push(&token, "1", &[LOG4J]).await;
+    let (_, before) = h
+        .call("GET", "/api/projects/shop/findings", Some(&token), None)
+        .await;
+    let snapshot = &before["coverage"]["last_complete_evaluation"];
+    assert_eq!(snapshot["release"], "1");
+    assert_eq!(snapshot["findings"][0]["vuln_key"], "CVE-2021-44228");
+    // A second process re-uploads the same release label with different contents, matching disabled.
+    let restarted = harness(db.clone(), |c| c.match_on_push = false).await;
+    let pushed = restarted.push(&token, "1", &[WIDGET]).await;
+    assert_eq!(pushed["coverage"]["complete"], false);
+    let retained = &pushed["coverage"]["last_complete_evaluation"];
+    assert_eq!(
+        retained["document_fingerprint"],
+        snapshot["document_fingerprint"]
+    );
+    assert_eq!(retained["declared_at"], snapshot["declared_at"]);
+    assert_eq!(retained["evaluated_at"], snapshot["evaluated_at"]);
+    assert_eq!(retained["findings"], snapshot["findings"]);
+    assert!(retained["identifier_evaluations"][0]["evaluated_at"].is_string());
+    let page = restarted.get_page("/projects/shop", true).await;
+    assert!(
+        page.body.contains("Incomplete matching evidence")
+            && page.body.contains("Last-known complete evaluation")
+    );
+    assert!(
+        page.body
+            .contains("Historical evidence, not a claim about the current production release")
+    );
+    assert!(page.body.contains("CVE-2021-44228"));
+    // Only a successful relevant evaluation replaces that snapshot, including a successful empty result.
+    restarted
+        .call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    let (_, complete) = restarted
+        .call("GET", "/api/projects/shop/findings", Some(&token), None)
+        .await;
+    assert_eq!(complete["coverage"]["complete"], true);
+    assert_ne!(
+        complete["coverage"]["last_complete_evaluation"]["document_fingerprint"],
+        snapshot["document_fingerprint"]
+    );
+    assert_eq!(
+        complete["coverage"]["last_complete_evaluation"]["findings"],
+        json!([])
+    );
+}
+
+#[sqlx::test]
+async fn rejected_and_partially_paginated_matching_preserves_last_known_evidence(db: PgPool) {
+    let h = harness(db.clone(), |_| {}).await;
+    *h.calls.widget.lock().unwrap() = vec![widget_advisory(
+        "WIDGET-retained",
+        &[],
+        "2026-01-01T00:00:00Z",
+    )];
+    let token = h.project("shop").await;
+    h.push(&token, "1", &[WIDGET, LODASH]).await;
+    h.call(
+        "PUT",
+        "/api/projects/shop/analyses/WIDGET-retained",
+        Some("admin"),
+        Some(json!({"state":"not_affected","detail":"reviewed"})),
+    )
+    .await;
+    let scans_before: Vec<(String, String)> =
+        sqlx::query_as("SELECT purl, scanned_at::text FROM purl_scans ORDER BY purl")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    let (_, before) = h
+        .call(
+            "GET",
+            "/api/projects/shop/findings?suppressed=true",
+            Some(&token),
+            None,
+        )
+        .await;
+    h.calls.reject_widget.store(true, Ordering::SeqCst);
+    h.calls
+        .reject_lodash_second_page
+        .store(true, Ordering::SeqCst);
+    h.call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    let (_, after) = h
+        .call(
+            "GET",
+            "/api/projects/shop/findings?suppressed=true",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(after["coverage"]["complete"], false);
+    assert_eq!(after["coverage"]["evaluated"], 0);
+    assert_eq!(after["findings"], before["findings"]);
+    assert_eq!(
+        after["coverage"]["last_complete_evaluation"],
+        before["coverage"]["last_complete_evaluation"]
+    );
+    let scans_after: Vec<(String, String)> =
+        sqlx::query_as("SELECT purl, scanned_at::text FROM purl_scans ORDER BY purl")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(scans_before, scans_after);
+    assert!(
+        after["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["id"] == "WIDGET-retained" && f["suppressed"] == true)
+    );
+    // Rejection of pagination page two must not replace the two prior advisory links with page one's subset.
+    assert_eq!(after["findings"].as_array().unwrap().len(), 3);
+}
+
+#[sqlx::test]
+async fn threshold_oscillation_and_ambiguous_delivery_retry_do_not_reset_episodes(db: PgPool) {
+    let h = harness(db.clone(), |c| {
+        c.alert_kev = false;
+        c.alert_min_severity = Some(crate::vulns::Severity::Critical);
+    })
+    .await;
+    let token = h.project("shop").await;
+    // The provider accepts delivery but responds with an error: the retry may duplicate it.
+    h.calls
+        .chat_fails_after_delivery
+        .store(true, Ordering::SeqCst);
+    h.push(&token, "1", &[LOG4J]).await;
+    assert_eq!(h.chat().len(), 1);
+    let recorded: i64 = sqlx::query_scalar("SELECT count(*) FROM alerts")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(recorded, 0);
+    h.calls
+        .chat_fails_after_delivery
+        .store(false, Ordering::SeqCst);
+    assert_eq!(jobs::alert(&h.st, None).await.unwrap(), 1);
+    assert_eq!(h.chat().len(), 2);
+    let episode: i64 = sqlx::query_scalar("SELECT episode FROM finding_episodes")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE vulnerabilities SET severity=1")
+        .execute(&db)
+        .await
+        .unwrap();
+    assert_eq!(jobs::alert(&h.st, None).await.unwrap(), 0);
+    sqlx::query("UPDATE vulnerabilities SET severity=4")
+        .execute(&db)
+        .await
+        .unwrap();
+    assert_eq!(jobs::alert(&h.st, None).await.unwrap(), 0);
+    let unchanged: i64 = sqlx::query_scalar("SELECT episode FROM finding_episodes")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(episode, unchanged);
+    assert_eq!(h.chat().len(), 2);
+}
+
+#[sqlx::test]
+async fn identity_merges_preserve_distinct_history_and_map_only_live_episodes(db: PgPool) {
+    let h = harness(db.clone(), |c| {
+        c.alert_min_severity = Some(crate::vulns::Severity::Critical)
+    })
+    .await;
+    let a = widget_advisory("RUSTSEC-merge", &[], "2026-01-01T00:00:00Z");
+    let b = widget_advisory("GHSA-merge", &["CVE-2026-2222"], "2026-01-01T00:00:00Z");
+    *h.calls.widget.lock().unwrap() = vec![a.clone(), b.clone()];
+    let token = h.project("shop").await;
+    h.push(&token, "1", &[WIDGET]).await;
+    *h.calls.widget.lock().unwrap() = vec![b.clone()];
+    h.call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    *h.calls.widget.lock().unwrap() = vec![a, b];
+    h.call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    assert_eq!(h.chat().len(), 2);
+    let history_before: i64 = sqlx::query_scalar("SELECT count(*) FROM alerts")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(history_before, 3);
+    let old_episodes: Vec<i64> =
+        sqlx::query_scalar("SELECT DISTINCT episode FROM alerts ORDER BY episode")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(old_episodes.len(), 3);
+    h.calls.widget.lock().unwrap()[0]["aliases"] = json!(["CVE-2026-2222"]);
+    h.calls.widget.lock().unwrap()[0]["modified"] = json!("2026-02-01T00:00:00Z");
+    let (_, result) = h
+        .call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    assert_eq!(result["alerted"], 0, "{result}");
+    let history: Vec<(i64, String, i64)> =
+        sqlx::query_as("SELECT id, vuln_key, episode FROM alerts ORDER BY id")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(
+        history.len(),
+        3,
+        "real deliveries must never disappear in a merge"
+    );
+    assert!(history.iter().all(|(_, key, _)| key == "CVE-2026-2222"));
+    assert_eq!(
+        history[0].2, old_episodes[0],
+        "closed historical episode remains distinct"
+    );
+    let active: i64 =
+        sqlx::query_scalar("SELECT episode FROM finding_episodes WHERE vuln_key='CVE-2026-2222'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(history.iter().filter(|(_, _, e)| *e == active).count(), 2);
+    assert_eq!(jobs::alert(&h.st, None).await.unwrap(), 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn historical_suppressions_migrate_pending_revalidation(db: PgPool) {
+    for migration in [
+        include_str!("../migrations/20261103000000_init.sql"),
+        include_str!("../migrations/20261103010000_kev.sql"),
+        include_str!("../migrations/20261104000000_vulnerabilities.sql"),
+        include_str!("../migrations/20261104010000_audit.sql"),
+        include_str!("../migrations/20261104020000_alerts.sql"),
+        include_str!("../migrations/20261104030000_licenses_policies.sql"),
+        include_str!("../migrations/20261104040000_metrics.sql"),
+        include_str!("../migrations/20261104050000_epss.sql"),
+    ] {
+        sqlx::raw_sql(migration).execute(&db).await.unwrap();
+    }
+    sqlx::raw_sql("INSERT INTO projects (name, token_hash) VALUES ('legacy','hash');
+        INSERT INTO sboms (project_id,version,document) VALUES (1,'1','{}');
+        INSERT INTO components (sbom_id,purl) VALUES (1,'pkg:cargo/widget@1');
+        INSERT INTO vulnerabilities (id,canonical_id,severity,modified,data) VALUES ('LEGACY','LEGACY',4,'now','{}');
+        INSERT INTO component_vulns VALUES ('pkg:cargo/widget@1','LEGACY');
+        INSERT INTO analyses (project_id,vuln_key,state,detail) VALUES (1,'LEGACY','not_affected','legacy rationale');")
+        .execute(&db).await.unwrap();
+    let suppressed: bool = sqlx::query_scalar("SELECT suppressed FROM findings")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert!(suppressed);
+    sqlx::raw_sql(include_str!("../migrations/20261110000000_evidence.sql"))
+        .execute(&db)
+        .await
+        .unwrap();
+    let row: (bool, String, Option<Value>) = sqlx::query_as("SELECT f.suppressed,a.detail,a.evidence FROM findings f JOIN analyses a USING (project_id,vuln_key)").fetch_one(&db).await.unwrap();
+    assert_eq!(row, (false, "legacy rationale".into(), None));
+}
+
+#[sqlx::test]
+async fn applicability_normalization_and_dashboard_revalidation_are_evidence_bound(db: PgPool) {
+    let h = harness(db, |_| {}).await;
+    let mut a = widget_advisory("NORMALIZED", &[], "2026-01-01T00:00:00Z");
+    a["affected"] = json!([{"package":{"name":"widget","ecosystem":"crates.io"},"versions":["1.0.0","0.9.0"],"database_specific":{"severity":"HIGH"}}]);
+    *h.calls.widget.lock().unwrap() = vec![a];
+    let token = h.project("shop").await;
+    h.push(&token, "1", &[WIDGET]).await;
+    h.call(
+        "PUT",
+        "/api/projects/shop/analyses/NORMALIZED",
+        Some("admin"),
+        Some(json!({"state":"not_affected","detail":"reviewed applicability"})),
+    )
+    .await;
+    h.calls.widget.lock().unwrap()[0]["affected"] = json!([{"versions":["0.9.0","1.0.0","1.0.0"],"package":{"ecosystem":"crates.io","name":"widget"},"database_specific":{"severity":"LOW"}}]);
+    h.calls.widget.lock().unwrap()[0]["modified"] = json!("2026-02-01T00:00:00Z");
+    h.call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    let (_, f) = h
+        .call(
+            "GET",
+            "/api/projects/shop/findings?suppressed=true",
+            Some(&token),
+            None,
+        )
+        .await;
+    assert_eq!(f["findings"][0]["suppressed"], true);
+    h.calls.widget.lock().unwrap()[0]["affected"][0]["versions"] = json!(["1.0.0", "1.1.0"]);
+    h.calls.widget.lock().unwrap()[0]["modified"] = json!("2026-03-01T00:00:00Z");
+    h.call("POST", "/api/jobs/refresh", Some("admin"), None)
+        .await;
+    let page = h.get_page("/projects/shop", true).await;
+    assert!(
+        page.body.contains("Pending revalidation") && page.body.contains("reviewed applicability")
+    );
+    assert!(
+        page.body.contains("Matching coverage")
+            && page
+                .body
+                .contains("1 evaluated / 1 usable versioned identifiers / 1 supplied components")
+    );
+}
+
+#[sqlx::test]
+async fn license_gaps_include_empty_and_unusable_declarations_without_changing_license_semantics(
+    db: PgPool,
+) {
+    let h = harness(db, |_| {}).await;
+    let token = h.project("shop").await;
+    let (_, result) = h
+        .call(
+            "POST",
+            "/api/sboms?version=1",
+            Some(&token),
+            Some(json!({"bomFormat":"CycloneDX","components":[
+                {"purl":"pkg:npm/a@1","licenses":[{}]},
+                {"purl":"pkg:npm/b@1","licenses":[{"license":{"id":"  "}}]},
+                {"purl":"pkg:npm/c@1","licenses":[{"expression":""}]},
+                {"purl":"pkg:npm/d@1","licenses":[{"license":{"name":"Custom"}}]},
+                {"purl":"pkg:npm/e@1","licenses":[{}, {"expression":"MIT OR Apache-2.0"}]}
+            ]})),
+        )
+        .await;
+    assert_eq!(result["coverage"]["license_gaps"], 3);
+    assert_eq!(result["coverage"]["evaluated"], 5);
 }

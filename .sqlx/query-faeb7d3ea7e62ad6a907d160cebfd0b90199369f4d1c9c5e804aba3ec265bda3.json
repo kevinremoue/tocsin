@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT canonical_id FROM vulnerabilities WHERE id = $1",
+  "query": "SELECT canonical_id FROM vulnerabilities\n         WHERE canonical_id = $1 OR id = $1 OR $1 = ANY (cve_ids)\n         ORDER BY canonical_id = $1 DESC, id = $1 DESC, withdrawn, id\n         LIMIT 1",
   "describe": {
     "columns": [
       {
@@ -24,5 +24,5 @@
       false
     ]
   },
-  "hash": "6acb3418db121ef0984d9779298fbebef6a5b3feccfaee1102107c70e6492537"
+  "hash": "faeb7d3ea7e62ad6a907d160cebfd0b90199369f4d1c9c5e804aba3ec265bda3"
 }

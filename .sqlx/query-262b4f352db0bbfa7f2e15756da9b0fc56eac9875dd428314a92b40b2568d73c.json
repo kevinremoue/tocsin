@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO analyses (project_id, vuln_key, state, justification, detail, updated_at)\n                 VALUES ($1, $2, $3, $4, $5, to_timestamp($6))\n                 ON CONFLICT (project_id, vuln_key) DO UPDATE SET state = EXCLUDED.state,\n                     justification = EXCLUDED.justification, detail = EXCLUDED.detail,\n                     updated_at = EXCLUDED.updated_at",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "262b4f352db0bbfa7f2e15756da9b0fc56eac9875dd428314a92b40b2568d73c"
+}

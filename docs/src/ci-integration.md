@@ -1,6 +1,6 @@
 # Pushing SBOMs from CI
 
-Tocsin works best when every production release pushes its SBOM automatically. Push from the pipeline that **builds the release**, not from every commit: Tocsin matches against each project's latest release, which should be what runs in production.
+Tocsin works best when every production release pushes its SBOM automatically. Push only **after successful production deployment**, not from every build: the upload declares what runs in production. Serialize deployment and upload steps per project.
 
 ## Generating a CycloneDX SBOM
 
@@ -27,7 +27,7 @@ Tocsin stores one SBOM per (project, version). The version comes from:
 1. the `?version=` query parameter, if present;
 2. otherwise `metadata.component.version` in the SBOM.
 
-The request fails with `400` if neither is set. Pushing the same version again replaces its SBOM, so re-running a release pipeline is safe.
+The request fails with `400` if neither is set. Pushing the same version again replaces its SBOM and makes it the latest release again, so re-running a release pipeline is safe.
 
 ## Large SBOMs: compress them
 
@@ -51,28 +51,15 @@ gzip -c bom.json | curl --fail-with-body -X POST "$TOCSIN_URL/api/sboms?version=
 - `findings` and `kev` count the unsuppressed vulnerabilities of the project's latest release, and those in the KEV catalog.
 - `alerted` is the number of vulnerabilities notified by this push.
 
-## Failing a build on actively exploited vulnerabilities
+## Post-deployment monitoring, not a release gate
 
-The push response is enough to gate a release:
+The response reports known matches in the declared production release. It must not be used to gate a candidate deployment: matching can be deferred, rejected identifiers produce coverage gaps, and even complete matching is not a safety assessment. Use a separate pre-deployment scanner for release gates.
 
-```sh
-response=$(curl --fail-with-body -sS -X POST "$TOCSIN_URL/api/sboms?version=$VERSION" \
-  -H "Authorization: Bearer $TOCSIN_TOKEN" -H "Content-Type: application/json" \
-  --data-binary @bom.json)
-echo "$response"
-if [ "$(echo "$response" | jq .kev)" -gt 0 ]; then
-  echo "This release contains actively exploited vulnerabilities:"
-  curl -sS "$TOCSIN_URL/api/projects/my-service/findings" -H "Authorization: Bearer $TOCSIN_TOKEN" \
-    | jq -r '.findings[] | select(.kev) | "\(.id) \(.summary) in \(.components | join(", "))"'
-  exit 1
-fi
-```
-
-The project token can read its own project's findings, so the same secret works for both calls. Findings audited as not affected, false positive or resolved are not counted. See [Vulnerabilities and auditing](vulnerabilities.md).
+Project tokens may read their project's findings. Only validated evidence-bound suppressions are excluded from the default results.
 
 ## GitHub Actions
 
-Store the project token as a repository secret named `TOCSIN_TOKEN`, then add these steps to your release workflow:
+Store the project token as a repository secret named `TOCSIN_TOKEN`, then add these steps after a successful production deployment (serialize the workflow per project):
 
 ```yaml
 - name: Generate SBOM
@@ -94,7 +81,7 @@ Store the project token as a repository secret named `TOCSIN_TOKEN`, then add th
 
 ## GitLab CI
 
-Store the project token as a masked CI/CD variable named `TOCSIN_TOKEN`:
+Store the project token as a masked CI/CD variable named `TOCSIN_TOKEN`. Run this job only after successful production deployment and serialize deployments/uploads for the project:
 
 ```yaml
 sbom:
@@ -125,3 +112,9 @@ sbom:
 | `413 Payload Too Large` | The SBOM is over 50 MB once decompressed, or over your platform's request limit: compress it. |
 | `415 Unsupported Media Type` | The `Content-Type: application/json` header is missing. |
 | `"matching": "deferred"` | OSV.dev was slow or unreachable. The release is stored; the next refresh job matches it. |
+
+## Production declaration and evidence limits
+
+Upload only after successful production deployment. The last accepted upload wins, including a rollback to an older version; serialize deployments and uploads in the caller. Tocsin does not stage candidates or gate deployment.
+
+The upload and findings responses expose `coverage` separately from `matching` processing status: total supplied components, usable versioned identifiers, successfully evaluated components, gap reasons, separate license gaps, and per-identifier last-successful evaluation provenance. Counts describe known matches, never a safety assessment.

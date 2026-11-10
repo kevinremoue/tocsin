@@ -13,9 +13,9 @@ Authorization: Bearer <token>
 There are two kinds of tokens:
 
 - **Admin token**: the value of `TOCSIN_ADMIN_TOKEN`. It can do everything.
-- **Project tokens**: returned once when a project is created. A project token can push SBOMs for its project, and read or audit that project only.
+- **Project tokens**: returned once when a project is created. A project token can push SBOMs for its project, and read that project only. Analysis writes/deletes and VEX imports require the admin token.
 
-Tokens are never stored in clear: Tocsin keeps their SHA-256 hash. For endpoints under `/api/projects/{name}/…`, both the admin token and that project's token work; any other token gets `404`, so project names cannot be probed.
+Tokens are never stored in clear: Tocsin keeps their SHA-256 hash. Read endpoints under `/api/projects/{name}/…` accept the admin token or that project's token; other tokens get `404`. Analysis writes/deletes and VEX imports require the admin token.
 
 | Endpoint | Token |
 |---|---|
@@ -64,7 +64,7 @@ Content-Type: application/json
 [Content-Encoding: gzip]
 ```
 
-**Body:** a CycloneDX JSON document, up to 50 MB once decompressed. The project comes from the token. The version comes from `?version=`, otherwise from `metadata.component.version`. Pushing an existing version replaces its SBOM and components.
+**Body:** a CycloneDX JSON document, up to 50 MB once decompressed. The project comes from the token. The version comes from `?version=`, otherwise from `metadata.component.version`. Pushing an existing version replaces its SBOM and components, and makes it the latest release again.
 
 Tocsin extracts the purl and licenses of every component, nested components included, then matches the components against the vulnerability sources (see [Pushing SBOMs from CI](ci-integration.md#the-push-response)).
 
@@ -98,7 +98,7 @@ The vulnerabilities affecting the project's latest release, KEV first, then by E
 }]}
 ```
 
-`id` is the flaw's CVE, or the advisory ID when it has none. `epss` is the highest [EPSS](vulnerabilities.md#likely-to-be-exploited-epss) score among the flaw's CVEs, `null` when it has none yet. `analysis` is `null` until a decision is recorded.
+`id` is the vulnerability's name: its CVE, or the advisory ID when it has none. `epss` is the highest [EPSS](vulnerabilities.md#likely-to-be-exploited-epss) score among its CVEs, `null` when it has none yet. `analysis` is `null` until a decision is recorded.
 
 ## Audit
 
@@ -107,7 +107,7 @@ PUT /api/projects/{name}/analyses/{id}
 {"state": "not_affected", "justification": "code_not_reachable", "detail": "…"}
 ```
 
-Records a decision. `{id}` is the CVE or any advisory ID of the flaw. `state` is one of `in_triage`, `exploitable`, `not_affected`, `false_positive`, `resolved`; `justification` and `detail` are optional. See [Vulnerabilities and auditing](vulnerabilities.md#auditing) for the values. Returns the stored analysis; `400` for an invalid state or justification.
+Records a decision. `{id}` is the CVE or any advisory ID of the vulnerability. `state` is one of `in_triage`, `exploitable`, `not_affected`, `false_positive`, `resolved`; `justification` and `detail` are optional. See [Vulnerabilities and auditing](vulnerabilities.md#auditing) for the values. Returns the stored analysis; `400` for an invalid state or justification.
 
 ```
 DELETE /api/projects/{name}/analyses/{id}
@@ -171,16 +171,26 @@ The dashboard pages require the admin token, as the password of HTTP Basic auth 
 
 Signed in with the admin token, the dashboard can do everything the API does: create projects, upload SBOMs, audit findings, export and import VEX, manage policies and run jobs. **Changes always require the admin token**: a public dashboard is read-only, with a **Sign in** link that asks for it. Without `TOCSIN_ADMIN_TOKEN`, nothing can be changed from the dashboard.
 
-The forms are plain HTML and work without JavaScript; [htmx](https://htmx.org), embedded in the binary, updates the page in place where it helps (audit decisions, jobs, policy deletion). Cross-site form posts are refused (`Sec-Fetch-Site` and `Origin` checks; `TOCSIN_PUBLIC_URL` is a trusted origin), and a Content-Security-Policy allows only Tocsin's own scripts and styles. Behind a reverse proxy, forward the `Host` and `Origin` headers unchanged.
+The forms are plain HTML and work without JavaScript; [htmx](https://htmx.org), embedded in the binary, updates the page in place where it helps (analyses, jobs, policy deletion). Cross-site form posts are refused (`Sec-Fetch-Site` and `Origin` checks; `TOCSIN_PUBLIC_URL` is a trusted origin), and a Content-Security-Policy allows only Tocsin's own scripts and styles. Behind a reverse proxy, forward the `Host` and `Origin` headers unchanged.
 
 | Page | Content |
 |---|---|
 | `/` | Portfolio: KEV and EPSS sync status, totals, and each project's latest release, findings per severity, KEV count, violations. For the admin: new project form (its token is shown once), and buttons to run the jobs. |
-| `/projects/{name}` | Findings with their audit forms (`q` searches, `severity` sets a minimum, `kev=on`, `suppressed=on`), policy violations, history chart, SBOM upload, VEX download and import, releases, components with licenses. |
+| `/projects/{name}` | Findings with their analysis forms (`q` searches, `severity` sets a minimum, `kev=on`, `suppressed=on`), policy violations, history chart, SBOM upload, VEX download and import, releases, components with licenses. |
 | `/projects/{name}/vex.json` | The project's VEX document, as a download. |
-| `/vulns` | Every flaw affecting a project. `q` searches, `kev=on` keeps KEV ones, `page` paginates. |
-| `/vulns/{id}` | A flaw: affected projects (with audit forms), advisories, details, references. `{id}` is the CVE or an advisory ID. |
+| `/vulns` | Every vulnerability affecting a project. `q` searches, `kev=on` keeps KEV ones, `page` paginates. |
+| `/vulns/{id}` | A vulnerability: affected projects and, separately, suppressed ones (with analysis forms), advisories, details, references. `{id}` is its name, any of its CVEs or an advisory ID. |
 | `/kev` | The KEV catalog. `q` searches, `ransomware=on`, `affecting=on` (only entries affecting a project), `page`. |
-| `/kev/{cve}` | A KEV entry, and the projects it affects. |
+| `/kev/{cve}` | A KEV entry, the projects it affects and, separately, those whose finding is suppressed. |
 | `/policies` | Policies and their violations; for the admin, forms to create and delete policies. |
 | `/alerts` | Alerts sent, and the current rules. |
+
+### Production and analysis contract
+
+An SBOM upload declares a successful production deployment. Serialize uploads: last accepted wins, including rollbacks. Project tokens are upload/read only; analysis writes/deletes and VEX imports require the admin token.
+
+Upload and findings responses include `coverage`: `total_supplied`, `usable_versioned_identifiers`, `evaluated`, `gaps`, `license_gaps`, `release`, and `identifier_evaluations` with last-successful timestamps. This is independent of upload `matching` processing status and is not a safety claim. Suppressing analyses with `pending_revalidation: true` retain their rationale but do not suppress findings. Suppressing VEX imports require current exact `affects` and the exported `tocsin:evidence` property.
+
+### Retained evaluation provenance
+
+`coverage.complete` describes current matching evidence, never safety. `coverage.last_complete_evaluation` retains the last complete project evaluation, including `release`, `declared_at`, `evaluated_at`, immutable `document_fingerprint`, per-identifier timestamps, and historical `findings`. A re-upload of the same version with different contents does not overwrite that evidence until matching is complete. During gaps or failed/partial matching, these historical results remain available, clearly separate from current observed findings. Historical analysis states never authorize a current suppression. Merely reading cached evidence does not advance the evaluation timestamp.

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "WITH affected AS (\n               SELECT k.cve_id, count(DISTINCT ls.project_id) AS projects\n               FROM kev_entries k\n               JOIN vulnerabilities v ON k.cve_id = ANY (v.cve_ids) AND NOT v.withdrawn\n               JOIN component_vulns cv ON cv.vuln_id = v.id\n               JOIN components c ON c.purl = cv.purl\n               JOIN latest_sboms ls ON ls.id = c.sbom_id\n               GROUP BY k.cve_id)\n           SELECT k.cve_id, k.vendor_project, k.product, k.name, k.known_ransomware,\n                  to_char(k.date_added, 'YYYY-MM-DD') AS \"date_added!\",\n                  COALESCE(a.projects, 0) AS \"projects!\",\n                  count(*) OVER () AS \"total!\"\n           FROM kev_entries k LEFT JOIN affected a ON a.cve_id = k.cve_id\n           WHERE ($1::text IS NULL OR k.cve_id ILIKE $1 OR k.vendor_project ILIKE $1\n                  OR k.product ILIKE $1 OR k.name ILIKE $1)\n             AND (NOT $2 OR k.known_ransomware)\n             AND (NOT $3 OR a.projects > 0)\n           ORDER BY k.date_added DESC, k.cve_id DESC\n           LIMIT $4 OFFSET $5",
+  "query": "WITH affected AS (\n               SELECT k.cve_id, count(DISTINCT f.project_id) AS projects\n               FROM kev_entries k\n               JOIN vulnerabilities v ON k.cve_id = ANY (v.cve_ids) AND NOT v.withdrawn\n               JOIN findings f ON f.vuln_key = v.canonical_id AND NOT f.suppressed\n               GROUP BY k.cve_id)\n           SELECT k.cve_id, k.vendor_project, k.product, k.name, k.known_ransomware,\n                  to_char(k.date_added, 'YYYY-MM-DD') AS \"date_added!\",\n                  COALESCE(a.projects, 0) AS \"projects!\",\n                  count(*) OVER () AS \"total!\"\n           FROM kev_entries k LEFT JOIN affected a ON a.cve_id = k.cve_id\n           WHERE ($1::text IS NULL OR k.cve_id ILIKE $1 OR k.vendor_project ILIKE $1\n                  OR k.product ILIKE $1 OR k.name ILIKE $1)\n             AND (NOT $2 OR k.known_ransomware)\n             AND (NOT $3 OR a.projects > 0)\n           ORDER BY k.date_added DESC, k.cve_id DESC\n           LIMIT $4 OFFSET $5",
   "describe": {
     "columns": [
       {
@@ -97,5 +97,5 @@
       null
     ]
   },
-  "hash": "b561d2d7a7a0b39be18d9ad6349fe9ba3182cd412183b9fa381dd254a6452931"
+  "hash": "60620785dc1c4559c43a589931cf039e1c59c3fad124c7b880ddf5f98ef350a3"
 }
